@@ -8,6 +8,30 @@
 <meta name="theme-color" content="#1E3A6E">
 <title>회중 일정</title>
 <link rel="manifest" href="manifest.json">
+
+<!-- Firebase SDK (compat 버전 — CDN) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyCdsQxE-t_Tywo6u9LIxo-YcJW4AB7LyTw",
+  authDomain: "congregation-app-817b0.firebaseapp.com",
+  projectId: "congregation-app-817b0",
+  storageBucket: "congregation-app-817b0.firebasestorage.app",
+  messagingSenderId: "750463019617",
+  appId: "1:750463019617:web:e6e534d5dc8ba483995820"
+};
+try {
+  firebase.initializeApp(firebaseConfig);
+  window._db = firebase.firestore();
+  window._firebaseReady = true;
+  console.log('✅ Firebase 연결됨');
+} catch(e) {
+  console.warn('Firebase 오류:', e.message);
+  window._firebaseReady = false;
+}
+</script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -1010,6 +1034,17 @@ function doLogout(){
 function startApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
+
+  // Firebase 동기화 후 화면 갱신
+  syncFromFirebase().then(()=>{
+    renderBoard();
+    renderCalendar();
+    renderLibrary();
+    renderPersonal(SESSION.userName||'');
+    applySettings();
+    updateMemberCountLabel();
+  });
+
   // 헤더 업데이트
   const s=loadData('cong_settings',{name:'○○ 회중'});
   document.getElementById('hdr-cong-name').textContent=s.name||SESSION.congName||'회중 일정';
@@ -1133,12 +1168,114 @@ const STATE={
 
 function loadData(k,def){try{return JSON.parse(localStorage.getItem(k))??def;}catch{return def;}}
 function saveData(k,v){localStorage.setItem(k,JSON.stringify(v));}
+
+// ── Firebase 동기화 ─────────────────────────────────────────
+// Firestore 컬렉션 매핑
+const FS_MAP = {
+  cong_board:    'board',
+  cong_events:   'events',
+  cong_members:  'members',
+  cong_settings: 'settings',
+  cong_library:  'library',
+};
+
+// Firestore에서 전체 데이터 로드 (배열형)
+async function fsLoad(collection) {
+  if(!window._firebaseReady) return null;
+  try {
+    const snap = await window._db.collection(collection).orderBy('_ts','asc').get();
+    if(snap.empty) return null;
+    return snap.docs.map(d => {const data=d.data(); delete data._ts; return data;});
+  } catch(e) {
+    console.warn('fsLoad 오류:', collection, e.message);
+    return null;
+  }
+}
+
+// Firestore에 배열 전체 저장 (덮어쓰기)
+async function fsSave(collection, arr) {
+  if(!window._firebaseReady) return;
+  try {
+    const col = window._db.collection(collection);
+    const batch = window._db.batch();
+    // 기존 문서 삭제
+    const snap = await col.get();
+    snap.docs.forEach(d => batch.delete(d.ref));
+    // 새 문서 추가
+    const ts = Date.now();
+    (arr||[]).forEach((item,i) => {
+      const ref = col.doc(item.id || `doc_${i}`);
+      batch.set(ref, {...item, _ts: ts + i});
+    });
+    await batch.commit();
+  } catch(e) {
+    console.warn('fsSave 오류:', collection, e.message);
+  }
+}
+
+// 단일 문서 저장 (settings 등)
+async function fsSaveDoc(collection, data) {
+  if(!window._firebaseReady) return;
+  try {
+    await window._db.collection(collection).doc('main').set(data);
+  } catch(e) {
+    console.warn('fsSaveDoc 오류:', collection, e.message);
+  }
+}
+
+async function fsLoadDoc(collection) {
+  if(!window._firebaseReady) return null;
+  try {
+    const snap = await window._db.collection(collection).doc('main').get();
+    return snap.exists ? snap.data() : null;
+  } catch(e) { return null; }
+}
+
+// Firebase에서 전체 동기화 (앱 시작 시)
+async function syncFromFirebase() {
+  if(!window._firebaseReady) return;
+  showToast('☁️ 데이터 동기화 중...');
+  try {
+    // settings
+    const settings = await fsLoadDoc('settings');
+    if(settings) saveData('cong_settings', settings);
+    // 배열 데이터
+    for(const [localKey, fsCol] of Object.entries(FS_MAP)) {
+      if(localKey === 'cong_settings') continue;
+      const data = await fsLoad(fsCol);
+      if(data !== null) saveData(localKey, data);
+    }
+    showToast('✅ 동기화 완료');
+  } catch(e) {
+    console.warn('syncFromFirebase 오류:', e);
+    showToast('⚠️ 동기화 실패 — 로컬 데이터 사용');
+  }
+}
+
+// 저장 시 로컬 + Firebase 동시 저장
+async function saveDataSync(k, v) {
+  saveData(k, v); // 로컬 즉시 저장
+  if(!window._firebaseReady) return;
+  const col = FS_MAP[k];
+  if(!col) return;
+  if(k === 'cong_settings') {
+    fsSaveDoc('settings', v);
+  } else {
+    fsSave(col, v);
+  }
+}
+
 const DB={
-  get posts(){return loadData('cong_board',[]);},set posts(v){saveData('cong_board',v);},
-  get events(){return loadData('cong_events',[]);},set events(v){saveData('cong_events',v);},
-  get members(){return loadData('cong_members',[]);},set members(v){saveData('cong_members',v);},
-  get settings(){return loadData('cong_settings',{name:'',password:'1234',notice:'',password_set:false});},set settings(v){saveData('cong_settings',v);},
-  get library(){return loadData('cong_library',[]);},set library(v){saveData('cong_library',v);},
+  get posts(){return loadData('cong_board',[]);},
+  set posts(v){saveDataSync('cong_board',v);},
+  get events(){return loadData('cong_events',[]);},
+  set events(v){saveDataSync('cong_events',v);},
+  get members(){return loadData('cong_members',[]);},
+  set members(v){saveDataSync('cong_members',v);},
+  get settings(){return loadData('cong_settings',{name:'',password:'1234',notice:'',password_set:false});},
+  set settings(v){saveDataSync('cong_settings',v);},
+  get library(){return loadData('cong_library',[]);},
+  set library(v){saveDataSync('cong_library',v);},
 };
 
 // ═══════════════════════════════════════════════════════════
