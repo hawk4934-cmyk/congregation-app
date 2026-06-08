@@ -1851,7 +1851,19 @@ function loadSheets(sheetList){
     combined=combined.concat(data);
   });
   STATE.uploadSheetData=combined;
-  STATE.fileType=detectFileType(STATE.uploadFile.name,combined);
+
+  // ── 파일 타입 결정: 시트명 우선 → 파일명 → 데이터 순 ──
+  const hasMonthSheet=sheetList.some(s=>/\d+월/.test(s));
+  const fname=(STATE.uploadFile.name||'').toLowerCase();
+  if(hasMonthSheet){
+    // 월별 시트가 선택됐으면 생봉 파서
+    STATE.fileType='saengbong';
+  } else if(fname.includes('공개')||fname.includes('강연')){
+    STATE.fileType='gongggang';
+  } else {
+    STATE.fileType=detectFileType(fname,combined);
+  }
+
   const tl={master:'📋 연간 마스터 배정표',saengbong:'🎯 생봉 전용 파서',
     gongggang:'🎤 공개강연 파서',generic:'📋 컬럼 지정'}[STATE.fileType]||'📋 로드됨';
   showToast(sheetList.length+'개 시트 로드 — '+tl);
@@ -1885,15 +1897,12 @@ function step1Next(){
     STATE.parsedSchedules=p;STATE.parseWarnings=[];renderUploadStep(3);
   } else if(STATE.fileType==='saengbong'){
     const p=parseSaengBong(STATE.uploadSheetData);
+    console.log('[생봉파서] 결과:', p.length,'건, 총행수:', STATE.uploadSheetData.length);
     if(!p.length){
-      // 디버그: 첫 5행 출력
-      console.log('[생봉파서 실패] 첫 5행:', STATE.uploadSheetData.slice(0,5));
-      console.log('[생봉파서 실패] 총 행수:', STATE.uploadSheetData.length);
-      // 파서 실패 시 컬럼 직접 지정으로 fallback
-      STATE.fileType='generic';
-      showToast('자동 인식 실패 — 컬럼을 직접 지정해주세요');
-      renderUploadStep(2);
-      return;
+      // 파싱 결과가 없으면 데이터 구조 문제 → 3단계에서 빈 결과 표시
+      STATE.parsedSchedules=[];STATE.parseWarnings=[];
+      showToast('⚠️ 배정 데이터를 찾지 못했습니다 — 결과를 확인해주세요');
+      renderUploadStep(3);return;
     }
     STATE.parsedSchedules=p;STATE.parseWarnings=[];renderUploadStep(3);
   } else if(STATE.fileType==='gongggang'){
