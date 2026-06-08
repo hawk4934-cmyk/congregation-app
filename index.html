@@ -706,8 +706,9 @@ function parseSaengBong(sheetData) {
 
   // 주차 헤더 판별: B열에 날짜 + 인근열에 노래
   const isWeekHdr = r => {
-    const ab = cl(r[0]||'')+cl(r[1]||'')+cl(r[2]||'');
-    const hasDate = /\d+월.{0,15}\d+일/.test(ab);
+    // B열(index 1)에서 앞뒤 공백 제거 후 날짜 패턴 확인
+    const b = cl(r[1]||'');
+    const hasDate = /\d+월.{0,15}\d+일/.test(b) || /\d+월.{0,5}\d+[일\-~]/.test(b);
     const hasNore = [4,5,6,7,8,9,10,11].some(ci=>cl(r[ci]||'').includes('노래'));
     return hasDate && hasNore;
   };
@@ -723,11 +724,11 @@ function parseSaengBong(sheetData) {
   const isClosing = r =>
     [0,1,2,3,4,5,6,7].some(ci=>cl(r[ci]||'').includes('맺음말'));
 
-  // 주차 날짜 정규화
+  // 주차 날짜 정규화 — B열(index 1) 기준
   const normWeek = row => {
-    const raw=(cl(row[0]||'')+' '+cl(row[1]||'')).replace(/\u200b/g,'');
-    const m=raw.match(/\d+월\s*\d+[일~\u2013\-]\s*(?:\d+월\s*)?\d+일?/);
-    return m?m[0].replace(/\s+/g,''):raw.replace(/예레미야.*|시편.*/,'').trim().slice(0,20);
+    const raw = cl(row[1]||'');
+    const m = raw.match(/\d+월\s*\d+[일~\u2013\-]\s*(?:\d+월\s*)?\d+일?/);
+    return m ? m[0].replace(/\s+/g,'') : raw.replace(/예레미야.*|시편.*/,'').trim().slice(0,20);
   };
 
   const results=[]; let week='',sec='',skip=false;
