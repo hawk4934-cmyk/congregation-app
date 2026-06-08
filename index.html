@@ -315,10 +315,22 @@ select.input-field{cursor:pointer}
 
     <!-- ③ 내 일정 -->
     <div class="tab-screen" id="screen-personal">
-      <div class="search-wrap">
-        <span style="font-size:18px;color:var(--g400)">🔍</span>
-        <input type="text" placeholder="이름으로 검색" id="personal-search" oninput="searchPersonal(this.value)">
-        <span style="font-size:16px;color:var(--g400);cursor:pointer;display:none" id="srch-clear" onclick="clearSearch()">✕</span>
+      <!-- 로그인한 이름 자동 표시 배너 -->
+      <div id="my-auto-banner" style="display:none;background:var(--pri-lt);border:1px solid #BFDBFE;border-radius:var(--r2);padding:10px 13px;margin-bottom:10px;display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">👤</span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:var(--pri)" id="my-auto-name">-</div>
+          <div style="font-size:11px;color:var(--g400)">내 배정 일정</div>
+        </div>
+        <button class="btn btn-sec" style="font-size:11px;padding:5px 10px" onclick="togglePersonalSearch()">이름 변경</button>
+      </div>
+      <!-- 검색창 (접을 수 있음) -->
+      <div id="personal-search-wrap" style="display:none">
+        <div class="search-wrap">
+          <span style="font-size:18px;color:var(--g400)">🔍</span>
+          <input type="text" placeholder="다른 이름 검색" id="personal-search" oninput="searchPersonal(this.value)">
+          <span style="font-size:16px;color:var(--g400);cursor:pointer;display:none" id="srch-clear" onclick="clearPersonalToMyName()">✕</span>
+        </div>
       </div>
       <div id="personal-result"></div>
     </div>
@@ -900,8 +912,15 @@ function startApp(){
   applySettings();
   renderBoard();
   renderCalendar();
-  renderPersonal('');
   renderLibrary();
+  // 내 일정: 로그인 후 자동으로 내 이름 검색 준비
+  const myBanner=document.getElementById('my-auto-banner');
+  const myNameEl=document.getElementById('my-auto-name');
+  if(myBanner&&SESSION.userName){
+    myBanner.style.display='flex';
+    if(myNameEl) myNameEl.textContent=SESSION.userName+' 형제/자매';
+  }
+  renderPersonal(SESSION.userName||'');
   updateMemberCountLabel();
   // 오늘 날짜 선택
   const t=new Date();
@@ -1016,6 +1035,8 @@ function switchTab(tab){
   document.getElementById('screen-'+tab).classList.add('active');
   document.getElementById('tab-'+tab).classList.add('active');
   document.getElementById('main-content').scrollTop=0;
+  // 내 일정 탭 → 자동으로 내 이름 검색
+  if(tab==='personal') initPersonalTab();
   const fab=document.getElementById('fab');
   fab.style.display=(tab==='board'||tab==='library')?canUpload()?'flex':'none':(tab==='settings')?canSeeSettings()?'flex':'none':'none';
   // 마스터 초기설정 배너
@@ -1253,45 +1274,158 @@ function searchPersonal(q){
   document.getElementById('srch-clear').style.display=q?'block':'none';
   renderPersonal(q);
 }
-function clearSearch(){document.getElementById('personal-search').value='';document.getElementById('srch-clear').style.display='none';renderPersonal('');}
+function clearSearch(){
+  document.getElementById('personal-search').value='';
+  document.getElementById('srch-clear').style.display='none';
+  renderPersonal('');
+}
+// 이름 변경 토글
+function togglePersonalSearch(){
+  const wrap=document.getElementById('personal-search-wrap');
+  const isOpen=wrap.style.display!=='none';
+  wrap.style.display=isOpen?'none':'block';
+  if(!isOpen) document.getElementById('personal-search').focus();
+}
+// 검색창 닫고 내 이름으로 돌아가기
+function clearPersonalToMyName(){
+  document.getElementById('personal-search').value='';
+  document.getElementById('personal-search-wrap').style.display='none';
+  renderPersonal(SESSION.userName||'');
+}
+// 탭 전환 시 내 이름 자동 검색
+function initPersonalTab(){
+  const name=SESSION.userName||'';
+  const banner=document.getElementById('my-auto-banner');
+  const nameEl=document.getElementById('my-auto-name');
+  if(name&&banner){
+    banner.style.display='flex';
+    if(nameEl) nameEl.textContent=name+' 형제/자매';
+  }
+  if(name) renderPersonal(name);
+}
 
 function renderPersonal(q){
   const el=document.getElementById('personal-result');
-  if(!q.trim()){el.innerHTML=`<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">이름을 검색해 주세요</div><div class="empty-sub">계획표에 등록된 내 배정을<br>한눈에 확인할 수 있습니다</div></div>`;return;}
+  if(!q||!q.trim()){
+    el.innerHTML=`<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">이름을 검색해 주세요</div><div class="empty-sub">계획표에 등록된 내 배정을<br>한눈에 확인할 수 있습니다</div></div>`;
+    return;
+  }
+
   const posts=DB.posts.filter(p=>p.hasSchedule&&p.schedules);
   const all=[];
-  posts.forEach(p=>p.schedules.filter(s=>s.name&&s.name.includes(q)).forEach(s=>all.push({...s,postTitle:p.title,postCat:p.category,postPeriod:p.period})));
-  // 보조자로 검색도
-  posts.forEach(p=>p.schedules.filter(s=>s.assistant&&s.assistant.includes(q)&&!(s.name&&s.name.includes(q))).forEach(s=>all.push({...s,name:s.assistant,role:s.role+' (보조)',postTitle:p.title,postCat:p.category,postPeriod:p.period})));
-  if(!all.length){el.innerHTML=`<div class="empty-state"><div class="empty-icon">😶</div><div class="empty-title">"${q}" 배정 없음</div><div class="empty-sub">이름을 다시 확인해 주세요</div></div>`;return;}
-  const grouped={};
-  all.forEach(s=>{const k=s.postTitle;if(!grouped[k])grouped[k]={title:s.postTitle,cat:s.postCat,period:s.postPeriod,items:[]};grouped[k].items.push(s);});
-  el.innerHTML=Object.values(grouped).map(g=>`
-    <div class="my-card">
-      <div class="my-hdr">
-        <div><div style="font-size:13px;font-weight:700">${g.title}</div><div style="font-size:11px;color:var(--g400);margin-top:1px">${g.period||''}</div></div>
-        <span class="badge ${CAT_BADGE[g.cat]||'b-gray'}">${g.items.length}건</span>
-      </div>
-      ${g.items.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(s=>{
-        const d=s.date?parseFlexDate(s.date):null;
-        return`<div class="my-row">
-          <div class="sched-date">${d?`<div class="d">${d.day}</div><div class="w">${DAYS[d.dow]}</div>`:`<div class="d" style="font-size:11px">${(s.date||'?').slice(0,5)}</div>`}</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:14px;font-weight:500">${s.role||'배정'}</div>
-            ${s.assistant&&!s.role.includes('보조')?`<div style="font-size:11px;color:var(--g400)">보조: ${s.assistant}</div>`:''}
+  // 담당자로 검색
+  posts.forEach(p=>p.schedules
+    .filter(s=>s.name&&s.name.includes(q))
+    .forEach(s=>all.push({...s,postTitle:p.title,postCat:p.category,postPeriod:p.period,matchType:'main'}))
+  );
+  // 보조자로 검색 (중복 제외)
+  posts.forEach(p=>p.schedules
+    .filter(s=>s.assistant&&s.assistant.includes(q)&&!(s.name&&s.name.includes(q)))
+    .forEach(s=>all.push({...s,name:q,role:s.role+' (보조)',postTitle:p.title,postCat:p.category,postPeriod:p.period,matchType:'assist'}))
+  );
+
+  if(!all.length){
+    el.innerHTML=`<div class="empty-state"><div class="empty-icon">😶</div><div class="empty-title">"${q}" 배정 없음</div><div class="empty-sub">계획표에 등록된 이름과 정확히 일치해야 합니다</div></div>`;
+    return;
+  }
+
+  // 날짜 정규화 후 정렬
+  all.forEach(s=>{
+    const parsed=s.date?parseFlexDate(s.date):null;
+    s._dateStr=parsed?parsed.dateStr||s.date:s.date||'';
+    s._parsed=parsed;
+  });
+  all.sort((a,b)=>a._dateStr.localeCompare(b._dateStr));
+
+  // 날짜별 그룹핑 (같은 날 중복 일정 직렬 표시)
+  const byDate={};
+  all.forEach(s=>{
+    const dk=s._dateStr||'미정';
+    if(!byDate[dk])byDate[dk]={dateStr:dk,parsed:s._parsed,items:[]};
+    byDate[dk].items.push(s);
+  });
+
+  // 카테고리 요약 (헤더용)
+  const catCounts={};
+  all.forEach(s=>{catCounts[s.postCat]=(catCounts[s.postCat]||0)+1;});
+  const catSummary=Object.entries(catCounts).map(([k,v])=>`<span class="badge ${CAT_BADGE[k]||'b-gray'}" style="margin-right:4px">${k} ${v}건</span>`).join('');
+
+  // 전체 요약 헤더
+  let html=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+    <span style="font-size:13px;font-weight:700;color:var(--g700)">총 ${all.length}건</span>
+    ${catSummary}
+  </div>`;
+
+  // 날짜별 카드
+  html+=Object.values(byDate).map(group=>{
+    const d=group.parsed;
+    const hasMultiple=group.items.length>1;
+    return`<div class="my-card">
+      <div class="my-hdr" style="background:${hasMultiple?'#FFF8E1':'var(--g50)'}">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="sched-date">
+            ${d?`<div class="d" style="font-size:18px">${d.day}</div><div class="w">${DAYS[d.dow]}</div>`
+              :`<div class="d" style="font-size:12px">${group.dateStr.slice(0,7)}</div>`}
           </div>
-          <span class="badge b-teal" style="font-size:10px">${s.name}</span>
-        </div>`;
-      }).join('')}
-    </div>`).join('');
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--g600)">${
+              d?`${new Date(group.dateStr+'T00:00:00').getFullYear()}년 ${d?new Date(group.dateStr+'T00:00:00').getMonth()+1:'-'}월 ${d.day}일 (${DAYS[d.dow]})`:group.dateStr
+            }</div>
+            ${hasMultiple?`<div style="font-size:10px;color:var(--warn);font-weight:600">중복 ${group.items.length}건</div>`:''}
+          </div>
+        </div>
+        <span class="badge ${hasMultiple?'b-amber':'b-gray'}" style="font-size:10px">${group.items.length}건</span>
+      </div>
+      ${group.items.map((s,idx)=>`
+        <div class="my-row" style="${idx<group.items.length-1?'border-bottom:1px solid var(--g100)':''}">
+          <div style="width:4px;height:36px;border-radius:2px;background:${
+            s.postCat==='공개강연'?'#059669':s.postCat==='생활봉사'?'#2563EB':s.postCat==='주차'?'#D97706':'#6B7280'
+          };flex-shrink:0"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;font-weight:600;color:var(--g800)">${s.role||'배정'}</div>
+            <div style="font-size:11px;color:var(--g400);margin-top:1px">${s.postTitle}${s.postPeriod?' · '+s.postPeriod:''}</div>
+            ${s.assistant&&!s.role.includes('보조')?`<div style="font-size:11px;color:var(--pri2)">보조: ${s.assistant}</div>`:''}
+          </div>
+          <span class="badge ${CAT_BADGE[s.postCat]||'b-gray'}" style="font-size:10px;flex-shrink:0">${s.postCat}</span>
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+
+  el.innerHTML=html;
 }
 
 function parseFlexDate(str){
   str=String(str).trim();
-  let m,d,y=new Date().getFullYear();
-  const r1=str.match(/^(\d{1,2})[\/\-](\d{1,2})$/),r2=str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/),r3=str.match(/(\d{1,2})월\s*(\d{1,2})/);
-  if(r2){y=+r2[1];m=+r2[2]-1;d=+r2[3];}else if(r1){m=+r1[1]-1;d=+r1[2];}else if(r3){m=+r3[1]-1;d=+r3[2];}else return null;
-  const date=new Date(y,m,d);return{day:d,dow:date.getDay()};
+  const cy=new Date().getFullYear();
+  let y=cy,mo,d;
+
+  // 엑셀 날짜 시리얼 숫자 (44000 ~ 46000 범위)
+  if(/^\d{5}$/.test(str)){
+    const n=+str;
+    if(n>40000&&n<50000){
+      const dt=new Date(Date.UTC(1899,11,30)+n*86400000);
+      return{day:dt.getUTCDate(),dow:dt.getUTCDay(),
+        dateStr:`${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`};
+    }
+  }
+  // YYYY-MM-DD
+  let m=str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if(m){y=+m[1];mo=+m[2]-1;d=+m[3];}
+  // YY.MM.DD or YYYY.MM.DD
+  else if((m=str.match(/^(\d{2,4})[.\-](\d{1,2})[.\-](\d{1,2})$/))){
+    y=+m[1];if(y<100)y+=2000;mo=+m[2]-1;d=+m[3];
+  }
+  // MM/DD or M/D
+  else if((m=str.match(/^(\d{1,2})\/(\d{1,2})$/))){mo=+m[1]-1;d=+m[2];}
+  // X월Y일
+  else if((m=str.match(/(\d{1,2})월\s*(\d{1,2})/))){mo=+m[1]-1;d=+m[2];}
+  else return null;
+
+  const date=new Date(y,mo,d);
+  return{
+    day:d,dow:date.getDay(),
+    dateStr:`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+  };
 }
 
 // ═══════════════════════════════════════════════════════════
