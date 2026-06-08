@@ -1,0 +1,1793 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="회중일정">
+<meta name="theme-color" content="#ffffff">
+<title>회중 일정</title>
+<link rel="manifest" href="manifest.json">
+
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+  import { getFirestore, collection, getDocs, addDoc, deleteDoc, doc, setDoc, onSnapshot, query, orderBy } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+  import { getStorage, ref, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js';
+
+  // ★ Firebase 설정을 여기에 붙여넣으세요 ★
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_PROJECT.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+  };
+
+  let app, db, storage;
+  try {
+    app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    storage = getStorage(app);
+    window._db = db;
+    window._storage = storage;
+    window._firebase = { collection, getDocs, addDoc, deleteDoc, doc, setDoc, onSnapshot, query, orderBy };
+    window._firebaseReady = true;
+    console.log('Firebase 연결됨');
+  } catch(e) {
+    console.warn('Firebase 미연결 — 로컬 모드로 실행:', e.message);
+    window._firebaseReady = false;
+  }
+</script>
+
+<!-- SheetJS (엑셀 파싱) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+:root {
+  --primary: #2563EB;
+  --primary-light: #EFF6FF;
+  --primary-dark: #1D4ED8;
+  --success: #059669;
+  --success-light: #ECFDF5;
+  --warning: #D97706;
+  --warning-light: #FFFBEB;
+  --danger: #DC2626;
+  --danger-light: #FEF2F2;
+  --gray-50: #F9FAFB;
+  --gray-100: #F3F4F6;
+  --gray-200: #E5E7EB;
+  --gray-300: #D1D5DB;
+  --gray-400: #9CA3AF;
+  --gray-500: #6B7280;
+  --gray-600: #4B5563;
+  --gray-700: #374151;
+  --gray-800: #1F2937;
+  --gray-900: #111827;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.10);
+  --font: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+body {
+  font-family: var(--font);
+  background: var(--gray-100);
+  color: var(--gray-800);
+  min-height: 100dvh;
+  display: flex;
+  justify-content: center;
+}
+
+#app {
+  width: 100%;
+  max-width: 480px;
+  min-height: 100dvh;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ── 상단 헤더 ── */
+#app-header {
+  background: #fff;
+  border-bottom: 1px solid var(--gray-200);
+  padding: 0 16px;
+  padding-top: env(safe-area-inset-top, 0px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: calc(56px + env(safe-area-inset-top, 0px));
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-title { font-size: 17px; font-weight: 600; color: var(--gray-900); }
+.header-sub   { font-size: 11px; color: var(--gray-400); margin-top: 1px; }
+.header-actions { display: flex; gap: 4px; }
+.icon-btn {
+  width: 36px; height: 36px; border-radius: var(--radius-md);
+  border: none; background: transparent; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--gray-500); font-size: 20px;
+  transition: background .15s;
+}
+.icon-btn:hover { background: var(--gray-100); }
+.icon-btn:active { background: var(--gray-200); transform: scale(.95); }
+
+/* ── 공지 배너 ── */
+#notice-banner {
+  background: var(--primary-light);
+  border-bottom: 1px solid #BFDBFE;
+  padding: 9px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #1E40AF;
+  flex-shrink: 0;
+}
+#notice-banner.hidden { display: none; }
+#notice-banner .notice-icon { font-size: 15px; flex-shrink: 0; }
+#notice-banner .notice-text { flex: 1; line-height: 1.4; }
+#notice-banner .notice-close { font-size: 16px; cursor: pointer; color: #93C5FD; padding: 0 2px; }
+
+/* ── 스크롤 영역 ── */
+#main-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* ── 하단 탭바 ── */
+#tab-bar {
+  background: #fff;
+  border-top: 1px solid var(--gray-200);
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 100;
+}
+.tab-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 8px 4px 6px;
+  cursor: pointer; border: none; background: transparent;
+  font-family: var(--font);
+  transition: opacity .15s;
+  position: relative;
+}
+.tab-item:active { opacity: .6; }
+.tab-icon { font-size: 22px; color: var(--gray-400); transition: color .15s; line-height: 1; }
+.tab-label { font-size: 10px; color: var(--gray-400); margin-top: 3px; font-weight: 500; transition: color .15s; }
+.tab-item.active .tab-icon,
+.tab-item.active .tab-label { color: var(--primary); }
+.tab-item.active::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 20%; right: 20%;
+  height: 2px;
+  background: var(--primary);
+  border-radius: 0 0 2px 2px;
+}
+
+/* ── 탭 화면 공통 ── */
+.tab-screen { display: none; padding: 14px 14px 20px; animation: fadeIn .18s ease; }
+.tab-screen.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ── 섹션 레이블 ── */
+.section-label {
+  font-size: 11px; font-weight: 600; color: var(--gray-400);
+  letter-spacing: .6px; text-transform: uppercase;
+  margin: 16px 0 8px;
+}
+.section-label:first-child { margin-top: 0; }
+
+/* ── 카드 ── */
+.card {
+  background: #fff;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-sm);
+}
+.card-body { padding: 12px 14px; }
+.card-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--gray-100);
+  cursor: pointer;
+  transition: background .12s;
+}
+.card-item:last-child { border-bottom: none; }
+.card-item:active { background: var(--gray-50); }
+
+/* ── 뱃지 ── */
+.badge {
+  display: inline-block;
+  font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 20px;
+  white-space: nowrap;
+}
+.badge-blue   { background: #EFF6FF; color: #1D4ED8; }
+.badge-teal   { background: #F0FDF4; color: #065F46; }
+.badge-amber  { background: #FFFBEB; color: #92400E; }
+.badge-purple { background: #F5F3FF; color: #5B21B6; }
+.badge-coral  { background: #FFF7ED; color: #9A3412; }
+.badge-gray   { background: var(--gray-100); color: var(--gray-600); }
+.badge-red    { background: #FEF2F2; color: #991B1B; }
+.badge-green  { background: #ECFDF5; color: #065F46; }
+
+/* ── 파일 아이콘 ── */
+.file-icon {
+  width: 40px; height: 40px; border-radius: var(--radius-md);
+  background: var(--gray-100);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+}
+
+/* ── FAB ── */
+.fab {
+  position: fixed;
+  bottom: calc(68px + env(safe-area-inset-bottom, 0px) + 16px);
+  right: calc(50% - 240px + 16px);
+  width: 52px; height: 52px; border-radius: 26px;
+  background: var(--primary);
+  border: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; color: #fff;
+  box-shadow: 0 4px 16px rgba(37,99,235,.4);
+  transition: transform .15s, box-shadow .15s;
+  z-index: 90;
+}
+.fab:active { transform: scale(.93); box-shadow: 0 2px 8px rgba(37,99,235,.3); }
+@media (max-width: 480px) {
+  .fab { right: 16px; }
+}
+
+/* ── 입력 필드 ── */
+.input-field {
+  width: 100%; padding: 10px 12px;
+  border: 1px solid var(--gray-300); border-radius: var(--radius-md);
+  font-size: 14px; font-family: var(--font); color: var(--gray-800);
+  background: #fff; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.input-field:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.1);
+}
+select.input-field { cursor: pointer; }
+
+/* ── 버튼 ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 18px; border-radius: var(--radius-md);
+  font-size: 14px; font-weight: 600; font-family: var(--font);
+  border: none; cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.btn:active { transform: scale(.97); }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-secondary { background: var(--gray-100); color: var(--gray-700); border: 1px solid var(--gray-200); }
+.btn-secondary:hover { background: var(--gray-200); }
+.btn-danger { background: var(--danger-light); color: var(--danger); }
+.btn-full { width: 100%; }
+
+/* ── 달력 ── */
+.cal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid var(--gray-100);
+}
+.cal-month { font-size: 15px; font-weight: 600; color: var(--gray-800); }
+.cal-nav {
+  width: 32px; height: 32px; border-radius: var(--radius-md);
+  border: 1px solid var(--gray-200); background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 16px; color: var(--gray-500);
+}
+.cal-nav:active { background: var(--gray-100); }
+.cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  padding: 8px 8px 12px; gap: 2px;
+}
+.cal-day-label {
+  text-align: center; font-size: 10px; font-weight: 600;
+  color: var(--gray-400); padding: 4px 0 6px; letter-spacing: .3px;
+}
+.cal-day-label:first-child { color: #EF4444; }
+.cal-day-label:last-child  { color: #3B82F6; }
+.cal-cell {
+  aspect-ratio: 1; border-radius: 8px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-size: 13px; color: var(--gray-600); cursor: pointer;
+  position: relative; transition: background .12s;
+}
+.cal-cell:first-child { color: #EF4444; }
+.cal-cell:nth-child(7n) { color: #3B82F6; }
+.cal-cell:hover { background: var(--gray-100); }
+.cal-cell.today { background: var(--primary); color: #fff !important; font-weight: 700; border-radius: 50%; }
+.cal-cell.has-event::after {
+  content: ''; position: absolute; bottom: 3px;
+  width: 4px; height: 4px; border-radius: 50%;
+  background: var(--primary);
+}
+.cal-cell.today.has-event::after { background: #fff; }
+.cal-cell.other-month { color: var(--gray-300) !important; }
+.cal-cell.selected { background: var(--primary-light); color: var(--primary) !important; font-weight: 600; }
+
+/* ── 이벤트 아이템 ── */
+.event-item {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--gray-100);
+  cursor: pointer; transition: background .12s;
+}
+.event-item:last-child { border-bottom: none; }
+.event-item:active { background: var(--gray-50); }
+.event-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.event-info .event-name { font-size: 14px; font-weight: 500; color: var(--gray-800); margin-bottom: 3px; }
+.event-info .event-meta { font-size: 12px; color: var(--gray-400); }
+
+/* ── 개인 일정 ── */
+.my-sched-card { background: #fff; border: 1px solid var(--gray-200); border-radius: var(--radius-lg); margin-bottom: 10px; overflow: hidden; box-shadow: var(--shadow-sm); }
+.my-sched-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; background: var(--gray-50); border-bottom: 1px solid var(--gray-200);
+}
+.my-sched-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--gray-100);
+}
+.my-sched-row:last-child { border-bottom: none; }
+.sched-date { min-width: 38px; text-align: center; }
+.sched-date .d { font-size: 16px; font-weight: 600; color: var(--gray-800); line-height: 1; }
+.sched-date .w { font-size: 10px; color: var(--gray-400); margin-top: 2px; }
+
+/* ── 검색창 ── */
+.search-wrap {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--gray-100); border-radius: var(--radius-lg);
+  padding: 10px 14px; margin-bottom: 14px;
+}
+.search-wrap input {
+  border: none; background: transparent; font-size: 14px;
+  font-family: var(--font); color: var(--gray-800); outline: none; flex: 1;
+}
+.search-icon { font-size: 18px; color: var(--gray-400); }
+
+/* ── 업로드 존 ── */
+.upload-zone {
+  border: 2px dashed var(--gray-300); border-radius: var(--radius-lg);
+  padding: 28px 16px; text-align: center; cursor: pointer;
+  background: var(--gray-50); transition: border-color .15s, background .15s;
+}
+.upload-zone:hover { border-color: var(--primary); background: var(--primary-light); }
+.upload-zone .uz-icon { font-size: 36px; color: var(--gray-400); margin-bottom: 8px; }
+.upload-zone .uz-title { font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 4px; }
+.upload-zone .uz-sub { font-size: 12px; color: var(--gray-400); }
+
+/* ── 모달 오버레이 ── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.45); z-index: 200;
+  align-items: flex-end; justify-content: center;
+}
+.modal-overlay.open { display: flex; animation: overlayIn .2s ease; }
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+
+.modal-sheet {
+  background: #fff; border-radius: 20px 20px 0 0;
+  width: 100%; max-width: 480px;
+  padding: 0 0 env(safe-area-inset-bottom, 16px);
+  max-height: 90dvh; overflow-y: auto;
+  animation: sheetUp .25s cubic-bezier(.32,1.06,.56,1);
+}
+@keyframes sheetUp { from { transform: translateY(60%); } to { transform: none; } }
+
+.modal-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--gray-300); margin: 10px auto 16px; }
+.modal-title { font-size: 16px; font-weight: 600; color: var(--gray-900); padding: 0 16px 14px; border-bottom: 1px solid var(--gray-100); }
+.modal-body { padding: 16px; }
+.modal-footer { padding: 12px 16px; display: flex; gap: 10px; border-top: 1px solid var(--gray-100); }
+
+/* ── 폼 그룹 ── */
+.form-group { margin-bottom: 14px; }
+.form-label { font-size: 12px; font-weight: 600; color: var(--gray-600); margin-bottom: 6px; display: block; }
+
+/* ── 토글 뷰 ── */
+.view-toggle {
+  display: flex; background: var(--gray-100); border-radius: var(--radius-md);
+  padding: 3px; margin-bottom: 12px; gap: 2px;
+}
+.view-toggle-btn {
+  flex: 1; padding: 6px; text-align: center; font-size: 13px;
+  font-weight: 500; border-radius: var(--radius-sm); cursor: pointer;
+  color: var(--gray-500); transition: all .15s; border: none; background: transparent; font-family: var(--font);
+}
+.view-toggle-btn.active { background: #fff; color: var(--gray-800); box-shadow: var(--shadow-sm); font-weight: 600; }
+
+/* ── 스텝바 ── */
+.step-bar { display: flex; align-items: center; margin-bottom: 20px; }
+.step-item { display: flex; flex-direction: column; align-items: center; flex: 1; }
+.step-circle {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+  border: 2px solid var(--gray-300); background: #fff; color: var(--gray-400);
+}
+.step-circle.active { border-color: var(--primary); color: var(--primary); }
+.step-circle.done { background: var(--primary); border-color: var(--primary); color: #fff; }
+.step-lbl { font-size: 10px; color: var(--gray-400); margin-top: 4px; }
+.step-lbl.active { color: var(--primary); font-weight: 600; }
+.step-line { height: 2px; flex: 1; background: var(--gray-200); margin-bottom: 14px; }
+.step-line.done { background: var(--primary); }
+
+/* ── 경고/알림 박스 ── */
+.alert { border-radius: var(--radius-md); padding: 10px 12px; margin-bottom: 12px; display: flex; align-items: flex-start; gap: 8px; font-size: 12px; }
+.alert-icon { font-size: 16px; flex-shrink: 0; }
+.alert-warning { background: var(--warning-light); color: #92400E; border: 1px solid #FDE68A; }
+.alert-info { background: var(--primary-light); color: #1E40AF; border: 1px solid #BFDBFE; }
+.alert-success { background: var(--success-light); color: #065F46; border: 1px solid #A7F3D0; }
+.alert-danger { background: var(--danger-light); color: #991B1B; border: 1px solid #FCA5A5; }
+
+/* ── 빈 상태 ── */
+.empty-state { text-align: center; padding: 48px 24px; color: var(--gray-400); }
+.empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
+.empty-state .empty-title { font-size: 15px; font-weight: 600; color: var(--gray-500); margin-bottom: 6px; }
+.empty-state .empty-sub { font-size: 13px; line-height: 1.6; }
+
+/* ── 미리보기 테이블 ── */
+.table-wrap { overflow-x: auto; border-radius: var(--radius-md); border: 1px solid var(--gray-200); }
+.preview-table { border-collapse: collapse; font-size: 11px; min-width: 100%; }
+.preview-table th { background: var(--primary-light); color: #1E40AF; font-weight: 600; padding: 6px 10px; border: 1px solid #BFDBFE; white-space: nowrap; }
+.preview-table th.mapped { background: #F0FDF4; color: #065F46; border-color: #A7F3D0; }
+.preview-table td { padding: 5px 10px; border: 1px solid var(--gray-200); color: var(--gray-700); white-space: nowrap; }
+.preview-table td.mapped { background: #F0FDF4; }
+
+/* ── 로딩 스피너 ── */
+.spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--gray-200); border-top-color: var(--primary); border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── 관리자 설정 ── */
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 14px; border-bottom: 1px solid var(--gray-100); cursor: pointer;
+}
+.settings-row:last-child { border-bottom: none; }
+.settings-row:active { background: var(--gray-50); }
+.settings-row-left { display: flex; align-items: center; gap: 12px; }
+.settings-icon { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+
+/* ── 토스트 ── */
+#toast {
+  position: fixed; bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+  left: 50%; transform: translateX(-50%);
+  background: var(--gray-900); color: #fff;
+  padding: 10px 18px; border-radius: 20px;
+  font-size: 13px; font-weight: 500;
+  opacity: 0; transition: opacity .25s; pointer-events: none;
+  white-space: nowrap; z-index: 300;
+  max-width: calc(100vw - 32px); text-align: center;
+}
+#toast.show { opacity: 1; }
+
+/* ── 관리자 배지 ── */
+#admin-badge {
+  position: absolute; top: -4px; right: -4px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--danger); border: 1.5px solid #fff;
+  display: none;
+}
+#admin-badge.show { display: block; }
+</style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- 헤더 -->
+  <div id="app-header">
+    <div>
+      <div class="header-title" id="congregation-name">○○ 회중</div>
+      <div class="header-sub" id="header-sub">일정 공유</div>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" onclick="openModal('notification-modal')" aria-label="알림">🔔</button>
+      <button class="icon-btn" onclick="switchTab('settings')" aria-label="설정">⚙️</button>
+    </div>
+  </div>
+
+  <!-- 공지 배너 -->
+  <div id="notice-banner" class="hidden">
+    <span class="notice-icon">📢</span>
+    <span class="notice-text" id="notice-text"></span>
+    <span class="notice-close" onclick="dismissBanner()">✕</span>
+  </div>
+
+  <!-- 메인 콘텐츠 -->
+  <div id="main-content">
+
+    <!-- ① 게시판 탭 -->
+    <div class="tab-screen active" id="screen-board">
+      <div id="board-filter" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;scrollbar-width:none">
+        <button class="badge badge-blue" style="cursor:pointer;white-space:nowrap;padding:5px 12px;font-size:12px" onclick="filterBoard('all')" data-cat="all">전체</button>
+        <button class="badge badge-gray" style="cursor:pointer;white-space:nowrap;padding:5px 12px;font-size:12px" onclick="filterBoard('생활봉사')" data-cat="생활봉사">생활봉사</button>
+        <button class="badge badge-gray" style="cursor:pointer;white-space:nowrap;padding:5px 12px;font-size:12px" onclick="filterBoard('공개강연')" data-cat="공개강연">공개강연</button>
+        <button class="badge badge-gray" style="cursor:pointer;white-space:nowrap;padding:5px 12px;font-size:12px" onclick="filterBoard('주차')" data-cat="주차">주차·마이크</button>
+        <button class="badge badge-gray" style="cursor:pointer;white-space:nowrap;padding:5px 12px;font-size:12px" onclick="filterBoard('공지')" data-cat="공지">공지</button>
+      </div>
+      <div id="board-list"></div>
+    </div>
+
+    <!-- ② 공식일정 탭 -->
+    <div class="tab-screen" id="screen-official">
+      <div class="view-toggle">
+        <button class="view-toggle-btn active" onclick="switchOfficialView('cal')" id="vbtn-cal">📅 달력</button>
+        <button class="view-toggle-btn" onclick="switchOfficialView('list')" id="vbtn-list">📋 목록</button>
+      </div>
+
+      <!-- 달력 뷰 -->
+      <div id="official-cal-view">
+        <div class="card">
+          <div class="cal-header">
+            <button class="cal-nav" onclick="changeMonth(-1)">‹</button>
+            <div class="cal-month" id="cal-month-label"></div>
+            <button class="cal-nav" onclick="changeMonth(1)">›</button>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+        </div>
+        <div class="section-label" id="selected-date-label">오늘 일정</div>
+        <div class="card" id="day-events-card">
+          <div class="empty-state" style="padding:24px">
+            <div class="empty-icon">📭</div>
+            <div class="empty-sub">등록된 일정이 없습니다</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 목록 뷰 -->
+      <div id="official-list-view" style="display:none">
+        <div class="card" id="official-list-card">
+          <div class="empty-state" style="padding:24px">
+            <div class="empty-icon">📭</div>
+            <div class="empty-sub">등록된 일정이 없습니다</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ③ 내 일정 탭 -->
+    <div class="tab-screen" id="screen-personal">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" placeholder="이름으로 검색 (예: 홍길동)" id="personal-search" oninput="searchPersonal(this.value)">
+        <span id="search-clear" style="font-size:16px;color:var(--gray-400);cursor:pointer;display:none" onclick="clearSearch()">✕</span>
+      </div>
+      <div id="personal-result"></div>
+    </div>
+
+    <!-- ④ 관리자 설정 탭 -->
+    <div class="tab-screen" id="screen-settings">
+      <div class="section-label">회중 설정</div>
+      <div class="card">
+        <div class="settings-row" onclick="openModal('edit-congregation-modal')">
+          <div class="settings-row-left">
+            <div class="settings-icon" style="background:#EFF6FF">🏠</div>
+            <div>
+              <div style="font-size:14px;font-weight:500">회중 이름</div>
+              <div style="font-size:12px;color:var(--gray-400)" id="settings-cong-name">○○ 회중</div>
+            </div>
+          </div>
+          <span style="color:var(--gray-300);font-size:18px">›</span>
+        </div>
+        <div class="settings-row" onclick="openModal('notice-edit-modal')">
+          <div class="settings-row-left">
+            <div class="settings-icon" style="background:#FFFBEB">📢</div>
+            <div>
+              <div style="font-size:14px;font-weight:500">공지 배너</div>
+              <div style="font-size:12px;color:var(--gray-400)">상단 공지 설정</div>
+            </div>
+          </div>
+          <span style="color:var(--gray-300);font-size:18px">›</span>
+        </div>
+      </div>
+
+      <div class="section-label">형제 명단</div>
+      <div class="card">
+        <div class="settings-row" onclick="openModal('members-modal')">
+          <div class="settings-row-left">
+            <div class="settings-icon" style="background:#F5F3FF">👥</div>
+            <div>
+              <div style="font-size:14px;font-weight:500">형제 명단 관리</div>
+              <div style="font-size:12px;color:var(--gray-400)" id="member-count-label">0명 등록됨</div>
+            </div>
+          </div>
+          <span style="color:var(--gray-300);font-size:18px">›</span>
+        </div>
+      </div>
+
+      <div class="section-label">게시판 관리</div>
+      <div class="card">
+        <div class="settings-row" onclick="openUploadModal()">
+          <div class="settings-row-left">
+            <div class="settings-icon" style="background:#F0FDF4">📤</div>
+            <div>
+              <div style="font-size:14px;font-weight:500">파일 업로드</div>
+              <div style="font-size:12px;color:var(--gray-400)">계획표·공지 등록</div>
+            </div>
+          </div>
+          <span style="color:var(--gray-300);font-size:18px">›</span>
+        </div>
+        <div class="settings-row" onclick="openModal('official-add-modal')">
+          <div class="settings-row-left">
+            <div class="settings-icon" style="background:#FFF7ED">📅</div>
+            <div>
+              <div style="font-size:14px;font-weight:500">공식 일정 추가</div>
+              <div style="font-size:12px;color:var(--gray-400)">날짜·행사 직접 입력</div>
+            </div>
+          </div>
+          <span style="color:var(--gray-300);font-size:18px">›</span>
+        </div>
+      </div>
+
+      <div class="section-label">Firebase 연결</div>
+      <div class="card">
+        <div class="card-body">
+          <div id="firebase-status" class="alert alert-warning">
+            <span class="alert-icon">⚠️</span>
+            <span>Firebase 미연결 — 로컬 데이터만 저장됩니다.<br>index.html의 firebaseConfig를 설정해 주세요.</span>
+          </div>
+          <button class="btn btn-secondary" style="font-size:12px;width:100%" onclick="checkFirebase()">연결 상태 확인</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main-content -->
+
+  <!-- 하단 탭바 -->
+  <div id="tab-bar">
+    <button class="tab-item active" onclick="switchTab('board')" id="tab-board">
+      <span class="tab-icon">📋</span>
+      <span class="tab-label">게시판</span>
+    </button>
+    <button class="tab-item" onclick="switchTab('official')" id="tab-official">
+      <span class="tab-icon">📅</span>
+      <span class="tab-label">공식일정</span>
+    </button>
+    <button class="tab-item" onclick="switchTab('personal')" id="tab-personal">
+      <span class="tab-icon">👤</span>
+      <span class="tab-label">내 일정</span>
+    </button>
+    <button class="tab-item" onclick="switchTab('settings')" id="tab-settings" style="position:relative">
+      <span class="tab-icon">⚙️</span>
+      <span class="tab-label">관리자</span>
+      <span id="admin-badge"></span>
+    </button>
+  </div>
+
+</div><!-- /app -->
+
+<!-- FAB: 게시판·관리자 탭에서만 표시 -->
+<button class="fab" id="fab" onclick="onFabClick()" style="display:none" aria-label="추가">＋</button>
+
+<!-- 토스트 -->
+<div id="toast"></div>
+
+<!-- ====================================================
+     모달들
+===================================================== -->
+
+<!-- 파일 업로드 모달 (4단계) -->
+<div class="modal-overlay" id="upload-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="upload-modal-title">파일 업로드 — ① 파일 선택</div>
+    <div class="modal-body" id="upload-modal-body"></div>
+  </div>
+</div>
+
+<!-- 공식 일정 추가 모달 -->
+<div class="modal-overlay" id="official-add-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">공식 일정 추가</div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">날짜</label>
+        <input type="date" class="input-field" id="evt-date">
+      </div>
+      <div class="form-group">
+        <label class="form-label">일정 이름</label>
+        <input type="text" class="input-field" id="evt-name" placeholder="예: 순회 대회">
+      </div>
+      <div class="form-group">
+        <label class="form-label">시간 (선택)</label>
+        <input type="time" class="input-field" id="evt-time">
+      </div>
+      <div class="form-group">
+        <label class="form-label">장소 (선택)</label>
+        <input type="text" class="input-field" id="evt-place" placeholder="예: 왕국회관">
+      </div>
+      <div class="form-group">
+        <label class="form-label">종류</label>
+        <select class="input-field" id="evt-type">
+          <option value="meeting">모임</option>
+          <option value="assembly">대회</option>
+          <option value="school">학교</option>
+          <option value="other">기타</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('official-add-modal')" style="flex:1">취소</button>
+      <button class="btn btn-primary" onclick="saveOfficialEvent()" style="flex:2">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 회중 이름 편집 모달 -->
+<div class="modal-overlay" id="edit-congregation-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">회중 이름 설정</div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">회중 이름</label>
+        <input type="text" class="input-field" id="cong-name-input" placeholder="예: 서울 강남 회중">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-congregation-modal')" style="flex:1">취소</button>
+      <button class="btn btn-primary" onclick="saveCongName()" style="flex:2">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 공지 배너 편집 모달 -->
+<div class="modal-overlay" id="notice-edit-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">공지 배너 설정</div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">공지 내용 (비워두면 배너 숨김)</label>
+        <textarea class="input-field" id="notice-input" rows="3" placeholder="예: 6월 21일 순회 대회가 있습니다" style="resize:none;line-height:1.5"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('notice-edit-modal')" style="flex:1">취소</button>
+      <button class="btn btn-primary" onclick="saveNotice()" style="flex:2">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 형제 명단 모달 -->
+<div class="modal-overlay" id="members-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">형제 명단 관리</div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input type="text" class="input-field" id="new-member-input" placeholder="이름 입력" style="flex:1">
+        <button class="btn btn-primary" onclick="addMember()">추가</button>
+      </div>
+      <div id="member-list" style="max-height:320px;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 알림 모달 -->
+<div class="modal-overlay" id="notification-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title">알림</div>
+    <div class="modal-body">
+      <div class="empty-state" style="padding:24px 0">
+        <div class="empty-icon">🔔</div>
+        <div class="empty-title">새 알림이 없습니다</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-full" onclick="closeModal('notification-modal')">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 게시물 상세 모달 -->
+<div class="modal-overlay" id="post-detail-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="post-detail-title"></div>
+    <div class="modal-body" id="post-detail-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" onclick="deleteCurrentPost()" style="flex:1">삭제</button>
+      <button class="btn btn-secondary" onclick="closeModal('post-detail-modal')" style="flex:2">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 이벤트 상세 모달 -->
+<div class="modal-overlay" id="event-detail-modal">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="event-detail-title"></div>
+    <div class="modal-body" id="event-detail-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" onclick="deleteCurrentEvent()" style="flex:1">삭제</button>
+      <button class="btn btn-secondary" onclick="closeModal('event-detail-modal')" style="flex:2">닫기</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ======================================================
+// 상태
+// ======================================================
+const STATE = {
+  currentTab: 'board',
+  calYear: new Date().getFullYear(),
+  calMonth: new Date().getMonth(),
+  selectedDate: null,
+  boardFilter: 'all',
+  officialView: 'cal',
+  currentPostId: null,
+  currentEventId: null,
+  uploadStep: 1,
+  uploadFile: null,
+  uploadWorkbook: null,
+  uploadSheetData: [],
+  uploadMapping: { date: 0, name: 2, role: 1, advisor: 3, assistant: 4 },
+  uploadCategory: '생활봉사',
+  uploadPeriod: '',
+};
+
+// ======================================================
+// 로컬 데이터 (Firebase 미연결 시 localStorage 사용)
+// ======================================================
+function loadData(key, def) {
+  try { return JSON.parse(localStorage.getItem(key)) ?? def; } catch { return def; }
+}
+function saveData(key, val) {
+  localStorage.setItem(key, JSON.stringify(val));
+}
+
+let DB = {
+  get boardPosts() { return loadData('cong_board', []); },
+  set boardPosts(v) { saveData('cong_board', v); },
+  get officialEvents() { return loadData('cong_events', []); },
+  set officialEvents(v) { saveData('cong_events', v); },
+  get members() { return loadData('cong_members', []); },
+  set members(v) { saveData('cong_members', v); },
+  get settings() { return loadData('cong_settings', { name: '○○ 회중', notice: '' }); },
+  set settings(v) { saveData('cong_settings', v); },
+};
+
+// ======================================================
+// 초기화
+// ======================================================
+document.addEventListener('DOMContentLoaded', () => {
+  applySettings();
+  renderBoard();
+  renderCalendar();
+  renderPersonal('');
+  updateMemberCountLabel();
+  switchTab('board');
+  // 오늘 날짜 선택
+  const today = new Date();
+  STATE.selectedDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  renderDayEvents(STATE.selectedDate);
+});
+
+function applySettings() {
+  const s = DB.settings;
+  document.getElementById('congregation-name').textContent = s.name || '○○ 회중';
+  document.getElementById('settings-cong-name').textContent = s.name || '○○ 회중';
+  document.getElementById('header-sub').textContent = '일정 공유';
+  if (s.notice) {
+    document.getElementById('notice-text').textContent = s.notice;
+    document.getElementById('notice-banner').classList.remove('hidden');
+  } else {
+    document.getElementById('notice-banner').classList.add('hidden');
+  }
+}
+
+// ======================================================
+// 탭 전환
+// ======================================================
+function switchTab(tab) {
+  STATE.currentTab = tab;
+  document.querySelectorAll('.tab-screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  document.getElementById('screen-' + tab).classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  document.getElementById('main-content').scrollTop = 0;
+
+  const fab = document.getElementById('fab');
+  if (tab === 'board' || tab === 'settings') {
+    fab.style.display = 'flex';
+  } else {
+    fab.style.display = 'none';
+  }
+}
+
+function onFabClick() {
+  if (STATE.currentTab === 'board' || STATE.currentTab === 'settings') {
+    openUploadModal();
+  }
+}
+
+// ======================================================
+// 게시판
+// ======================================================
+const CAT_BADGE = {
+  '생활봉사': 'badge-blue',
+  '공개강연': 'badge-teal',
+  '주차': 'badge-amber',
+  '마이크': 'badge-amber',
+  '공지': 'badge-purple',
+  '기타': 'badge-gray',
+};
+const CAT_ICON = {
+  '생활봉사': '📊',
+  '공개강연': '🎤',
+  '주차': '🚗',
+  '마이크': '🎙️',
+  '공지': '📢',
+  '기타': '📄',
+};
+
+function filterBoard(cat) {
+  STATE.boardFilter = cat;
+  document.querySelectorAll('[data-cat]').forEach(b => {
+    const isActive = b.dataset.cat === cat;
+    b.className = 'badge ' + (isActive ? 'badge-blue' : 'badge-gray');
+    b.style.cssText = 'cursor:pointer;white-space:nowrap;padding:5px 12px;font-size:12px';
+  });
+  renderBoard();
+}
+
+function renderBoard() {
+  const posts = DB.boardPosts;
+  const filtered = STATE.boardFilter === 'all'
+    ? posts
+    : posts.filter(p => p.category === STATE.boardFilter || (STATE.boardFilter === '주차' && p.category === '마이크'));
+
+  const el = document.getElementById('board-list');
+  if (!filtered.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">📂</div><div class="empty-title">등록된 파일이 없습니다</div><div class="empty-sub">관리자 탭에서 파일을 업로드해 주세요</div></div>`;
+    return;
+  }
+  el.innerHTML = filtered.slice().reverse().map(p => `
+    <div class="card">
+      <div class="card-item" onclick="openPost('${p.id}')">
+        <div class="file-icon">${CAT_ICON[p.category] || '📄'}</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+            <span class="badge ${CAT_BADGE[p.category] || 'badge-gray'}">${p.category}</span>
+            ${p.hasSchedule ? '<span class="badge badge-green" style="font-size:9px">개인일정연동</span>' : ''}
+          </div>
+          <div style="font-size:14px;font-weight:500;color:var(--gray-800);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.title}</div>
+          <div style="font-size:12px;color:var(--gray-400);margin-top:3px">${p.period || ''} · ${formatDate(p.createdAt)}</div>
+        </div>
+        <span style="color:var(--gray-300);font-size:20px;flex-shrink:0">›</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function openPost(id) {
+  const post = DB.boardPosts.find(p => p.id === id);
+  if (!post) return;
+  STATE.currentPostId = id;
+  document.getElementById('post-detail-title').textContent = post.title;
+
+  let body = `
+    <div style="margin-bottom:14px">
+      <span class="badge ${CAT_BADGE[post.category] || 'badge-gray'}">${post.category}</span>
+      ${post.period ? `<span style="font-size:12px;color:var(--gray-400);margin-left:8px">${post.period}</span>` : ''}
+    </div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">등록일: ${formatDate(post.createdAt)}</div>
+  `;
+
+  if (post.fileType === 'image' && post.fileData) {
+    body += `<img src="${post.fileData}" style="width:100%;border-radius:var(--radius-md);border:1px solid var(--gray-200)" alt="계획표">`;
+  } else if (post.fileData && post.fileType === 'excel') {
+    body += `<div class="alert alert-info"><span class="alert-icon">📊</span><span>엑셀 파일 · ${post.scheduleCount || 0}건 배정 추출됨<br><span style="font-size:11px">내 일정 탭에서 이름 검색으로 확인하세요</span></span></div>`;
+    if (post.scheduleCount) {
+      body += renderSchedulePreview(post.schedules || []);
+    }
+  }
+
+  if (post.note) {
+    body += `<div style="margin-top:12px;font-size:13px;color:var(--gray-600);line-height:1.6;white-space:pre-wrap">${post.note}</div>`;
+  }
+
+  document.getElementById('post-detail-body').innerHTML = body;
+  openModal('post-detail-modal');
+}
+
+function renderSchedulePreview(schedules) {
+  if (!schedules.length) return '';
+  const preview = schedules.slice(0, 5);
+  return `
+    <div style="margin-top:10px">
+      <div class="section-label" style="margin-top:0">추출된 배정 (${schedules.length}건)</div>
+      <div class="table-wrap">
+        <table class="preview-table">
+          <thead><tr><th>날짜</th><th>이름</th><th>역할</th></tr></thead>
+          <tbody>
+            ${preview.map(s => `<tr><td>${s.date}</td><td>${s.name}</td><td>${s.role}</td></tr>`).join('')}
+            ${schedules.length > 5 ? `<tr><td colspan="3" style="text-align:center;color:var(--gray-400)">외 ${schedules.length-5}건</td></tr>` : ''}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function deleteCurrentPost() {
+  if (!confirm('삭제하시겠습니까?')) return;
+  DB.boardPosts = DB.boardPosts.filter(p => p.id !== STATE.currentPostId);
+  closeModal('post-detail-modal');
+  renderBoard();
+  renderPersonal(document.getElementById('personal-search').value);
+  showToast('삭제되었습니다');
+}
+
+// ======================================================
+// 공식 일정
+// ======================================================
+function switchOfficialView(v) {
+  STATE.officialView = v;
+  document.getElementById('official-cal-view').style.display = v === 'cal' ? 'block' : 'none';
+  document.getElementById('official-list-view').style.display = v === 'list' ? 'block' : 'none';
+  document.getElementById('vbtn-cal').classList.toggle('active', v === 'cal');
+  document.getElementById('vbtn-list').classList.toggle('active', v === 'list');
+  if (v === 'list') renderOfficialList();
+}
+
+function changeMonth(delta) {
+  STATE.calMonth += delta;
+  if (STATE.calMonth > 11) { STATE.calMonth = 0; STATE.calYear++; }
+  if (STATE.calMonth < 0)  { STATE.calMonth = 11; STATE.calYear--; }
+  renderCalendar();
+}
+
+const DAYS = ['일','월','화','수','목','금','토'];
+const EVENT_COLORS = { meeting: '#2563EB', assembly: '#059669', school: '#D97706', other: '#6B7280' };
+
+function renderCalendar() {
+  const y = STATE.calYear, m = STATE.calMonth;
+  document.getElementById('cal-month-label').textContent = `${y}년 ${m+1}월`;
+
+  const events = DB.officialEvents;
+  const eventDates = new Set(events.filter(e => {
+    const d = new Date(e.date);
+    return d.getFullYear() === y && d.getMonth() === m;
+  }).map(e => e.date));
+
+  const firstDay = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+
+  let html = DAYS.map(d => `<div class="cal-day-label">${d}</div>`).join('');
+  for (let i = 0; i < firstDay; i++) html += `<div class="cal-cell other-month"></div>`;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isToday = dateStr === todayStr;
+    const hasEvent = eventDates.has(dateStr);
+    const isSelected = dateStr === STATE.selectedDate;
+    const cls = [isToday ? 'today' : '', hasEvent ? 'has-event' : '', isSelected && !isToday ? 'selected' : ''].filter(Boolean).join(' ');
+    html += `<div class="cal-cell ${cls}" onclick="selectDate('${dateStr}')">${d}</div>`;
+  }
+
+  document.getElementById('cal-grid').innerHTML = html;
+}
+
+function selectDate(dateStr) {
+  STATE.selectedDate = dateStr;
+  renderCalendar();
+  renderDayEvents(dateStr);
+}
+
+function renderDayEvents(dateStr) {
+  const d = new Date(dateStr);
+  const label = `${d.getMonth()+1}월 ${d.getDate()}일 (${DAYS[d.getDay()]}) 일정`;
+  document.getElementById('selected-date-label').textContent = label;
+
+  const events = DB.officialEvents.filter(e => e.date === dateStr);
+  const card = document.getElementById('day-events-card');
+  if (!events.length) {
+    card.innerHTML = `<div class="empty-state" style="padding:20px"><div class="empty-icon" style="font-size:32px">📭</div><div class="empty-sub">이 날 등록된 일정이 없습니다</div></div>`;
+    return;
+  }
+  card.innerHTML = events.map(e => `
+    <div class="event-item" onclick="openEventDetail('${e.id}')">
+      <div class="event-dot" style="background:${EVENT_COLORS[e.type] || '#6B7280'}"></div>
+      <div class="event-info">
+        <div class="event-name">${e.name}</div>
+        <div class="event-meta">${e.time ? e.time + ' · ' : ''}${e.place || '장소 미정'}</div>
+      </div>
+      <span style="color:var(--gray-300);font-size:18px;margin-left:auto">›</span>
+    </div>
+  `).join('');
+}
+
+function renderOfficialList() {
+  const events = DB.officialEvents.slice().sort((a,b) => a.date.localeCompare(b.date));
+  const card = document.getElementById('official-list-card');
+  if (!events.length) {
+    card.innerHTML = `<div class="empty-state" style="padding:24px"><div class="empty-icon">📭</div><div class="empty-sub">등록된 일정이 없습니다</div></div>`;
+    return;
+  }
+  // 월별 그룹
+  const grouped = {};
+  events.forEach(e => {
+    const d = new Date(e.date);
+    const key = `${d.getFullYear()}-${d.getMonth()+1}`;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(e);
+  });
+
+  card.innerHTML = Object.entries(grouped).map(([key, evs]) => {
+    const [y, m] = key.split('-');
+    return `
+      <div style="padding:10px 14px 6px;font-size:12px;font-weight:600;color:var(--gray-400);background:var(--gray-50);border-bottom:1px solid var(--gray-100)">${y}년 ${m}월</div>
+      ${evs.map(e => {
+        const d = new Date(e.date);
+        return `
+          <div class="event-item" onclick="openEventDetail('${e.id}')">
+            <div style="min-width:44px;text-align:center">
+              <div style="font-size:18px;font-weight:600;color:var(--gray-800);line-height:1">${d.getDate()}</div>
+              <div style="font-size:10px;color:var(--gray-400)">${DAYS[d.getDay()]}</div>
+            </div>
+            <div class="event-dot" style="background:${EVENT_COLORS[e.type] || '#6B7280'};margin-top:2px"></div>
+            <div class="event-info">
+              <div class="event-name">${e.name}</div>
+              <div class="event-meta">${e.time ? e.time + ' · ' : ''}${e.place || ''}</div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    `;
+  }).join('');
+}
+
+function openEventDetail(id) {
+  const e = DB.officialEvents.find(ev => ev.id === id);
+  if (!e) return;
+  STATE.currentEventId = id;
+  const d = new Date(e.date);
+  const typeLabel = { meeting:'모임', assembly:'대회', school:'학교', other:'기타' };
+  document.getElementById('event-detail-title').textContent = e.name;
+  document.getElementById('event-detail-body').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <span style="font-size:13px;color:var(--gray-500);min-width:48px">날짜</span>
+        <span style="font-size:14px;font-weight:500">${d.getFullYear()}년 ${d.getMonth()+1}월 ${d.getDate()}일 (${DAYS[d.getDay()]})</span>
+      </div>
+      ${e.time ? `<div style="display:flex;gap:8px;align-items:center"><span style="font-size:13px;color:var(--gray-500);min-width:48px">시간</span><span style="font-size:14px;font-weight:500">${e.time}</span></div>` : ''}
+      ${e.place ? `<div style="display:flex;gap:8px;align-items:center"><span style="font-size:13px;color:var(--gray-500);min-width:48px">장소</span><span style="font-size:14px;font-weight:500">${e.place}</span></div>` : ''}
+      <div style="display:flex;gap:8px;align-items:center"><span style="font-size:13px;color:var(--gray-500);min-width:48px">종류</span><span class="badge badge-blue">${typeLabel[e.type] || e.type}</span></div>
+    </div>
+  `;
+  openModal('event-detail-modal');
+}
+
+function saveOfficialEvent() {
+  const date = document.getElementById('evt-date').value;
+  const name = document.getElementById('evt-name').value.trim();
+  if (!date || !name) { showToast('날짜와 이름을 입력해주세요'); return; }
+  const events = DB.officialEvents;
+  events.push({
+    id: genId(),
+    date, name,
+    time: document.getElementById('evt-time').value,
+    place: document.getElementById('evt-place').value.trim(),
+    type: document.getElementById('evt-type').value,
+    createdAt: Date.now(),
+  });
+  DB.officialEvents = events;
+  closeModal('official-add-modal');
+  renderCalendar();
+  if (STATE.selectedDate) renderDayEvents(STATE.selectedDate);
+  renderOfficialList();
+  showToast('일정이 추가되었습니다');
+  ['evt-date','evt-name','evt-time','evt-place'].forEach(id => document.getElementById(id).value = '');
+}
+
+function deleteCurrentEvent() {
+  if (!confirm('삭제하시겠습니까?')) return;
+  DB.officialEvents = DB.officialEvents.filter(e => e.id !== STATE.currentEventId);
+  closeModal('event-detail-modal');
+  renderCalendar();
+  if (STATE.selectedDate) renderDayEvents(STATE.selectedDate);
+  renderOfficialList();
+  showToast('삭제되었습니다');
+}
+
+// ======================================================
+// 내 일정
+// ======================================================
+function searchPersonal(q) {
+  document.getElementById('search-clear').style.display = q ? 'block' : 'none';
+  renderPersonal(q);
+}
+
+function clearSearch() {
+  document.getElementById('personal-search').value = '';
+  document.getElementById('search-clear').style.display = 'none';
+  renderPersonal('');
+}
+
+function renderPersonal(q) {
+  const el = document.getElementById('personal-result');
+  if (!q.trim()) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">이름을 검색해 주세요</div><div class="empty-sub">계획표에 등록된 내 배정을<br>한눈에 확인할 수 있습니다</div></div>`;
+    return;
+  }
+  const posts = DB.boardPosts.filter(p => p.hasSchedule && p.schedules);
+  const allSchedules = [];
+  posts.forEach(p => {
+    p.schedules.filter(s => s.name && s.name.includes(q)).forEach(s => {
+      allSchedules.push({ ...s, postTitle: p.title, postCategory: p.category, postPeriod: p.period });
+    });
+  });
+
+  if (!allSchedules.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">😶</div><div class="empty-title">"${q}" 배정 없음</div><div class="empty-sub">이름을 다시 확인해 주세요<br>또는 관리자에게 문의하세요</div></div>`;
+    return;
+  }
+
+  // 계획표별 그룹
+  const grouped = {};
+  allSchedules.forEach(s => {
+    const key = s.postTitle;
+    if (!grouped[key]) grouped[key] = { title: s.postTitle, category: s.postCategory, period: s.postPeriod, items: [] };
+    grouped[key].items.push(s);
+  });
+
+  el.innerHTML = Object.values(grouped).map(g => `
+    <div class="my-sched-card">
+      <div class="my-sched-header">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--gray-800)">${g.title}</div>
+          <div style="font-size:11px;color:var(--gray-400);margin-top:2px">${g.period || ''}</div>
+        </div>
+        <span class="badge ${CAT_BADGE[g.category] || 'badge-gray'}">${g.items.length}건</span>
+      </div>
+      ${g.items.sort((a,b) => (a.date||'').localeCompare(b.date||'')).map(s => {
+        const d = s.date ? parseFlexDate(s.date) : null;
+        return `
+          <div class="my-sched-row">
+            <div class="sched-date">
+              ${d ? `<div class="d">${d.day}</div><div class="w">${DAYS[d.dow]}</div>` : `<div class="d" style="font-size:12px">${s.date||'?'}</div>`}
+            </div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:14px;font-weight:500;color:var(--gray-800)">${s.role || '배정'}</div>
+              ${s.advisor ? `<div style="font-size:11px;color:var(--gray-400)">조언자: ${s.advisor}</div>` : ''}
+              ${s.assistant ? `<div style="font-size:11px;color:var(--gray-400)">보조: ${s.assistant}</div>` : ''}
+            </div>
+            <span class="badge badge-teal" style="font-size:10px">${s.name}</span>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `).join('');
+}
+
+function parseFlexDate(str) {
+  // "6/3", "06/03", "2025-06-03", "6월3일" 등 처리
+  str = String(str).trim();
+  let m, d, y = new Date().getFullYear();
+  const r1 = str.match(/^(\d{1,2})[\/\-](\d{1,2})$/);
+  const r2 = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  const r3 = str.match(/(\d{1,2})월\s*(\d{1,2})/);
+  if (r2) { y = +r2[1]; m = +r2[2]-1; d = +r2[3]; }
+  else if (r1) { m = +r1[1]-1; d = +r1[2]; }
+  else if (r3) { m = +r3[1]-1; d = +r3[2]; }
+  else return null;
+  const date = new Date(y, m, d);
+  return { day: d, dow: date.getDay() };
+}
+
+// ======================================================
+// 파일 업로드 (4단계)
+// ======================================================
+function openUploadModal() {
+  STATE.uploadStep = 1;
+  STATE.uploadFile = null;
+  STATE.uploadWorkbook = null;
+  STATE.uploadSheetData = [];
+  renderUploadStep(1);
+  openModal('upload-modal');
+}
+
+function renderUploadStep(step) {
+  STATE.uploadStep = step;
+  const titles = { 1: '파일 업로드 — ① 파일 선택', 2: '파일 업로드 — ② 컬럼 지정', 3: '파일 업로드 — ③ 결과 확인', 4: '✅ 업로드 완료' };
+  document.getElementById('upload-modal-title').textContent = titles[step];
+
+  const body = document.getElementById('upload-modal-body');
+  if (step === 1) body.innerHTML = renderUploadStep1();
+  if (step === 2) body.innerHTML = renderUploadStep2();
+  if (step === 3) body.innerHTML = renderUploadStep3();
+  if (step === 4) body.innerHTML = renderUploadStep4();
+}
+
+function renderUploadStep1() {
+  return `
+    <div class="step-bar">
+      <div class="step-item"><div class="step-circle active">1</div><div class="step-lbl active">선택</div></div>
+      <div class="step-line"></div>
+      <div class="step-item"><div class="step-circle">2</div><div class="step-lbl">컬럼</div></div>
+      <div class="step-line"></div>
+      <div class="step-item"><div class="step-circle">3</div><div class="step-lbl">확인</div></div>
+      <div class="step-line"></div>
+      <div class="step-item"><div class="step-circle">4</div><div class="step-lbl">저장</div></div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">계획표 종류</label>
+      <select class="input-field" id="up-category" onchange="STATE.uploadCategory=this.value">
+        <option value="생활봉사">생활과 봉사 계획표</option>
+        <option value="공개강연">공개강연 계획표</option>
+        <option value="주차">주차 임명표</option>
+        <option value="마이크">마이크 임명표</option>
+        <option value="공지">공지</option>
+        <option value="기타">기타</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">적용 기간 (선택)</label>
+      <input type="text" class="input-field" id="up-period" placeholder="예: 2025년 6월" oninput="STATE.uploadPeriod=this.value">
+    </div>
+    <div class="form-group">
+      <label class="form-label">파일 선택</label>
+      <div class="upload-zone" onclick="document.getElementById('file-input').click()">
+        <div class="uz-icon">📂</div>
+        <div class="uz-title">파일을 선택하세요</div>
+        <div class="uz-sub">엑셀(.xlsx .xls) · 이미지(.jpg .png) 지원</div>
+      </div>
+      <input type="file" id="file-input" accept=".xlsx,.xls,.jpg,.jpeg,.png,.gif,.webp" style="display:none" onchange="handleFileSelect(this)">
+    </div>
+    <div id="file-selected-info" style="display:none" class="alert alert-success">
+      <span class="alert-icon">✅</span>
+      <span id="file-info-text"></span>
+    </div>
+    <div class="form-group">
+      <label class="form-label">제목</label>
+      <input type="text" class="input-field" id="up-title" placeholder="게시판에 표시될 제목">
+    </div>
+    <div class="form-group">
+      <label class="form-label">메모 (선택)</label>
+      <textarea class="input-field" id="up-note" rows="2" placeholder="추가 안내사항" style="resize:none"></textarea>
+    </div>
+    <button class="btn btn-primary btn-full" onclick="uploadStep1Next()" style="margin-top:4px">다음 →</button>
+  `;
+}
+
+function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  STATE.uploadFile = file;
+  const isExcel = file.name.match(/\.(xlsx|xls)$/i);
+  const isImage = file.name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+  document.getElementById('file-info-text').textContent = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+  document.getElementById('file-selected-info').style.display = 'flex';
+  document.getElementById('up-title').value = file.name.replace(/\.[^.]+$/, '');
+
+  if (isExcel) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        STATE.uploadWorkbook = wb;
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        STATE.uploadSheetData = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      } catch(err) { showToast('엑셀 파일을 읽을 수 없습니다'); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+function uploadStep1Next() {
+  const title = document.getElementById('up-title').value.trim();
+  if (!title) { showToast('제목을 입력해주세요'); return; }
+  if (!STATE.uploadFile) { showToast('파일을 선택해주세요'); return; }
+  STATE.uploadCategory = document.getElementById('up-category').value;
+  STATE.uploadPeriod = document.getElementById('up-period').value;
+  STATE.uploadTitle = title;
+  STATE.uploadNote = document.getElementById('up-note').value;
+
+  const isExcel = STATE.uploadFile.name.match(/\.(xlsx|xls)$/i);
+  if (isExcel && STATE.uploadSheetData.length) {
+    renderUploadStep(2);
+  } else {
+    // 이미지는 바로 저장
+    saveImagePost();
+  }
+}
+
+function renderUploadStep2() {
+  const data = STATE.uploadSheetData;
+  const headers = data[0] || [];
+  const cols = headers.map((h, i) => `<option value="${i}">${String.fromCharCode(65+i)}열${h ? ' ('+h+')' : ''}</option>`).join('');
+  const noneOpt = '<option value="-1">없음</option>';
+  const m = STATE.uploadMapping;
+
+  const previewRows = data.slice(0, 5);
+
+  return `
+    <div class="step-bar">
+      <div class="step-item"><div class="step-circle done">✓</div><div class="step-lbl">선택</div></div>
+      <div class="step-line done"></div>
+      <div class="step-item"><div class="step-circle active">2</div><div class="step-lbl active">컬럼</div></div>
+      <div class="step-line"></div>
+      <div class="step-item"><div class="step-circle">3</div><div class="step-lbl">확인</div></div>
+      <div class="step-line"></div>
+      <div class="step-item"><div class="step-circle">4</div><div class="step-lbl">저장</div></div>
+    </div>
+
+    <div class="alert alert-info"><span class="alert-icon">ℹ️</span><span>각 항목이 엑셀의 몇 번째 열인지 선택하세요. 이 설정은 저장됩니다.</span></div>
+
+    <div class="form-group">
+      <label class="form-label">날짜 열 <span style="color:var(--danger)">*</span></label>
+      <select class="input-field" id="map-date" onchange="previewMapping()">${cols}</select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">이름 열 <span style="color:var(--danger)">*</span></label>
+      <select class="input-field" id="map-name" onchange="previewMapping()">${cols}</select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">역할 열 <span style="color:var(--danger)">*</span></label>
+      <select class="input-field" id="map-role" onchange="previewMapping()">${cols}</select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">조언자 열</label>
+      <select class="input-field" id="map-advisor" onchange="previewMapping()">${noneOpt}${cols}</select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">보조 열</label>
+      <select class="input-field" id="map-assistant" onchange="previewMapping()">${noneOpt}${cols}</select>
+    </div>
+
+    <div class="section-label" style="margin-top:8px">미리보기 (상위 5행)</div>
+    <div id="mapping-preview"></div>
+
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-secondary" onclick="renderUploadStep(1)" style="flex:1">← 이전</button>
+      <button class="btn btn-primary" onclick="uploadStep2Next()" style="flex:2">다음 →</button>
+    </div>
+  `;
+  setTimeout(() => previewMapping(), 50);
+}
+
+function previewMapping() {
+  const get = id => { const el = document.getElementById(id); return el ? +el.value : -1; };
+  const dateCol = get('map-date'), nameCol = get('map-name'), roleCol = get('map-role');
+  const advisorCol = get('map-advisor'), assistantCol = get('map-assistant');
+  const rows = STATE.uploadSheetData.slice(0, 6);
+  const mappedCols = new Set([dateCol, nameCol, roleCol, ...(advisorCol >= 0 ? [advisorCol] : []), ...(assistantCol >= 0 ? [assistantCol] : [])]);
+
+  const headers = rows[0] || [];
+  let html = `<div class="table-wrap"><table class="preview-table"><thead><tr>`;
+  headers.slice(0, 8).forEach((h, i) => {
+    html += `<th class="${mappedCols.has(i) ? 'mapped' : ''}">${String.fromCharCode(65+i)}${h ? '<br><span style="font-weight:400">'+h+'</span>' : ''}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  rows.slice(1).forEach(row => {
+    html += '<tr>';
+    (row.slice(0, 8) || []).forEach((cell, i) => {
+      html += `<td class="${mappedCols.has(i) ? 'mapped' : ''}">${cell}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += `</tbody></table></div>`;
+  const el = document.getElementById('mapping-preview');
+  if (el) el.innerHTML = html;
+}
+
+function uploadStep2Next() {
+  const get = id => { const el = document.getElementById(id); return el ? +el.value : -1; };
+  STATE.uploadMapping = {
+    date: get('map-date'), name: get('map-name'), role: get('map-role'),
+    advisor: get('map-advisor'), assistant: get('map-assistant'),
+  };
+  saveData('cong_last_mapping', STATE.uploadMapping);
+  renderUploadStep(3);
+}
+
+function renderUploadStep3() {
+  const m = STATE.uploadMapping;
+  const rows = STATE.uploadSheetData.slice(1);
+  const schedules = [];
+  const warnings = [];
+
+  rows.forEach((row, idx) => {
+    const date = String(row[m.date] || '').trim();
+    const name = String(row[m.name] || '').trim();
+    const role = String(row[m.role] || '').trim();
+    if (!date && !name && !role) return;
+    if (!name || !date) {
+      warnings.push({ row: idx+2, issue: name ? '날짜 없음' : '이름 없음', raw: row.slice(0,6).join(' | ') });
+      return;
+    }
+    schedules.push({
+      date, name, role,
+      advisor: m.advisor >= 0 ? String(row[m.advisor] || '').trim() : '',
+      assistant: m.assistant >= 0 ? String(row[m.assistant] || '').trim() : '',
+    });
+  });
+
+  STATE.parsedSchedules = schedules;
+  STATE.parseWarnings = warnings;
+
+  return `
+    <div class="step-bar">
+      <div class="step-item"><div class="step-circle done">✓</div><div class="step-lbl">선택</div></div>
+      <div class="step-line done"></div>
+      <div class="step-item"><div class="step-circle done">✓</div><div class="step-lbl">컬럼</div></div>
+      <div class="step-line done"></div>
+      <div class="step-item"><div class="step-circle active">3</div><div class="step-lbl active">확인</div></div>
+      <div class="step-line"></div>
+      <div class="step-item"><div class="step-circle">4</div><div class="step-lbl">저장</div></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+      <div style="background:var(--primary-light);border-radius:var(--radius-md);padding:12px;text-align:center">
+        <div style="font-size:24px;font-weight:700;color:var(--primary)">${schedules.length}</div>
+        <div style="font-size:11px;color:#1E40AF;margin-top:2px">추출된 배정</div>
+      </div>
+      <div style="background:${warnings.length ? 'var(--warning-light)' : 'var(--success-light)'};border-radius:var(--radius-md);padding:12px;text-align:center">
+        <div style="font-size:24px;font-weight:700;color:${warnings.length ? 'var(--warning)' : 'var(--success)'}">${warnings.length}</div>
+        <div style="font-size:11px;color:${warnings.length ? '#92400E' : '#065F46'};margin-top:2px">확인 필요</div>
+      </div>
+    </div>
+
+    ${warnings.length ? `
+      <div class="alert alert-warning"><span class="alert-icon">⚠️</span><span>${warnings.length}건은 날짜 또는 이름이 없어 제외됩니다</span></div>
+      <div class="card" style="margin-bottom:12px">
+        ${warnings.slice(0,3).map(w => `<div class="card-item" style="cursor:default"><div style="font-size:12px;color:var(--danger);font-weight:500">${w.row}행 — ${w.issue}</div><div style="font-size:11px;color:var(--gray-400);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${w.raw}</div></div>`).join('')}
+        ${warnings.length > 3 ? `<div style="padding:8px 14px;font-size:12px;color:var(--gray-400)">외 ${warnings.length-3}건...</div>` : ''}
+      </div>
+    ` : `<div class="alert alert-success"><span class="alert-icon">✅</span><span>모든 행이 정상 추출되었습니다</span></div>`}
+
+    <div class="section-label">추출 결과 미리보기</div>
+    <div class="table-wrap" style="margin-bottom:14px">
+      <table class="preview-table">
+        <thead><tr><th>날짜</th><th>이름</th><th>역할</th>${schedules[0]?.advisor !== undefined ? '<th>조언자</th>' : ''}</tr></thead>
+        <tbody>
+          ${schedules.slice(0,6).map(s => `<tr><td>${s.date}</td><td>${s.name}</td><td>${s.role}</td>${s.advisor !== undefined ? `<td>${s.advisor}</td>` : ''}</tr>`).join('')}
+          ${schedules.length > 6 ? `<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:8px">외 ${schedules.length-6}건</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-secondary" onclick="renderUploadStep(2)" style="flex:1">← 컬럼 재설정</button>
+      <button class="btn btn-primary" onclick="saveExcelPost()" style="flex:2">저장하기</button>
+    </div>
+  `;
+}
+
+function renderUploadStep4() {
+  return `
+    <div style="text-align:center;padding:20px 0 16px">
+      <div style="font-size:52px;margin-bottom:12px">✅</div>
+      <div style="font-size:17px;font-weight:600;color:var(--gray-800);margin-bottom:6px">업로드 완료</div>
+      <div style="font-size:13px;color:var(--gray-500);line-height:1.6">${STATE.uploadTitle}<br>${STATE.parsedSchedules ? STATE.parsedSchedules.length + '건 배정 저장됨' : '게시판에 등록됨'}</div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <div style="padding:10px 14px;display:flex;justify-content:space-between;border-bottom:1px solid var(--gray-100)">
+        <span style="font-size:13px;color:var(--gray-500)">카테고리</span>
+        <span style="font-size:13px;font-weight:500">${STATE.uploadCategory}</span>
+      </div>
+      <div style="padding:10px 14px;display:flex;justify-content:space-between;border-bottom:1px solid var(--gray-100)">
+        <span style="font-size:13px;color:var(--gray-500)">기간</span>
+        <span style="font-size:13px;font-weight:500">${STATE.uploadPeriod || '미설정'}</span>
+      </div>
+      ${STATE.parsedSchedules ? `<div style="padding:10px 14px;display:flex;justify-content:space-between">
+        <span style="font-size:13px;color:var(--gray-500)">배정 건수</span>
+        <span style="font-size:13px;font-weight:500;color:var(--primary)">${STATE.parsedSchedules.length}건</span>
+      </div>` : ''}
+    </div>
+    <button class="btn btn-primary btn-full" onclick="closeModal('upload-modal');renderBoard();renderPersonal(document.getElementById('personal-search').value||'')">완료 — 게시판으로</button>
+    <div style="height:8px"></div>
+    <button class="btn btn-secondary btn-full" onclick="renderUploadStep(1)">새 파일 업로드</button>
+  `;
+}
+
+function saveExcelPost() {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const post = {
+      id: genId(),
+      title: STATE.uploadTitle,
+      category: STATE.uploadCategory,
+      period: STATE.uploadPeriod,
+      note: STATE.uploadNote,
+      fileType: 'excel',
+      fileData: null,
+      hasSchedule: true,
+      schedules: STATE.parsedSchedules,
+      scheduleCount: STATE.parsedSchedules.length,
+      createdAt: Date.now(),
+    };
+    const posts = DB.boardPosts;
+    posts.push(post);
+    DB.boardPosts = posts;
+    renderUploadStep(4);
+    showToast(`${STATE.parsedSchedules.length}건 저장 완료`);
+  };
+  reader.readAsArrayBuffer(STATE.uploadFile);
+}
+
+function saveImagePost() {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const post = {
+      id: genId(),
+      title: STATE.uploadTitle,
+      category: STATE.uploadCategory,
+      period: STATE.uploadPeriod,
+      note: STATE.uploadNote,
+      fileType: 'image',
+      fileData: e.target.result,
+      hasSchedule: false,
+      createdAt: Date.now(),
+    };
+    const posts = DB.boardPosts;
+    posts.push(post);
+    DB.boardPosts = posts;
+    STATE.parsedSchedules = null;
+    renderUploadStep(4);
+    showToast('이미지 등록 완료');
+  };
+  reader.readAsDataURL(STATE.uploadFile);
+}
+
+// ======================================================
+// 설정
+// ======================================================
+function saveCongName() {
+  const name = document.getElementById('cong-name-input').value.trim();
+  if (!name) { showToast('이름을 입력해주세요'); return; }
+  const s = DB.settings; s.name = name; DB.settings = s;
+  applySettings();
+  document.getElementById('settings-cong-name').textContent = name;
+  closeModal('edit-congregation-modal');
+  showToast('저장되었습니다');
+}
+
+function saveNotice() {
+  const text = document.getElementById('notice-input').value.trim();
+  const s = DB.settings; s.notice = text; DB.settings = s;
+  applySettings();
+  closeModal('notice-edit-modal');
+  showToast(text ? '공지가 등록되었습니다' : '공지를 숨겼습니다');
+}
+
+function dismissBanner() {
+  document.getElementById('notice-banner').classList.add('hidden');
+}
+
+// ======================================================
+// 형제 명단
+// ======================================================
+function addMember() {
+  const input = document.getElementById('new-member-input');
+  const name = input.value.trim();
+  if (!name) return;
+  const members = DB.members;
+  if (members.includes(name)) { showToast('이미 있는 이름입니다'); return; }
+  members.push(name);
+  DB.members = members;
+  input.value = '';
+  renderMemberList();
+  updateMemberCountLabel();
+}
+
+function removeMember(name) {
+  DB.members = DB.members.filter(m => m !== name);
+  renderMemberList();
+  updateMemberCountLabel();
+}
+
+function renderMemberList() {
+  const el = document.getElementById('member-list');
+  const members = DB.members;
+  if (!members.length) {
+    el.innerHTML = `<div style="text-align:center;color:var(--gray-400);font-size:13px;padding:20px">등록된 형제가 없습니다</div>`;
+    return;
+  }
+  el.innerHTML = members.map(m => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100)">
+      <span style="font-size:14px;color:var(--gray-800)">${m}</span>
+      <button onclick="removeMember('${m}')" style="border:none;background:none;color:var(--danger);font-size:13px;cursor:pointer;padding:4px 8px">삭제</button>
+    </div>
+  `).join('');
+}
+
+function updateMemberCountLabel() {
+  document.getElementById('member-count-label').textContent = `${DB.members.length}명 등록됨`;
+}
+
+// ======================================================
+// 모달 공통
+// ======================================================
+function openModal(id) {
+  const m = document.getElementById(id);
+  m.classList.add('open');
+  if (id === 'members-modal') renderMemberList();
+  if (id === 'edit-congregation-modal') document.getElementById('cong-name-input').value = DB.settings.name || '';
+  if (id === 'notice-edit-modal') document.getElementById('notice-input').value = DB.settings.notice || '';
+  if (id === 'official-add-modal') {
+    const today = new Date();
+    document.getElementById('evt-date').value = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  }
+  // 배경 클릭 닫기
+  m.onclick = e => { if (e.target === m) closeModal(id); };
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+// ======================================================
+// 유틸
+// ======================================================
+function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+function formatDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+}
+
+let _toastTimer;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+function checkFirebase() {
+  const el = document.getElementById('firebase-status');
+  if (window._firebaseReady) {
+    el.className = 'alert alert-success';
+    el.innerHTML = '<span class="alert-icon">✅</span><span>Firebase 연결 정상</span>';
+  } else {
+    el.className = 'alert alert-warning';
+    el.innerHTML = '<span class="alert-icon">⚠️</span><span>Firebase 미연결 — index.html의 firebaseConfig를 설정해 주세요</span>';
+  }
+}
+
+// 컬럼 매핑 미리보기 setTimeout 처리
+function renderUploadStep2WithPreview() {
+  const html = renderUploadStep2();
+  document.getElementById('upload-modal-body').innerHTML = html;
+  setTimeout(previewMapping, 100);
+}
+</script>
+</body>
+</html>
