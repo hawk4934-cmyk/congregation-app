@@ -13,22 +13,27 @@
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script>
-const firebaseConfig = {
-  apiKey: "AIzaSyCdsQxE-t_Tywo6u9LIxo-YcJW4AB7LyTw",
-  authDomain: "congregation-app-817b0.firebaseapp.com",
-  projectId: "congregation-app-817b0",
-  storageBucket: "congregation-app-817b0.firebasestorage.app",
-  messagingSenderId: "750463019617",
-  appId: "1:750463019617:web:e6e534d5dc8ba483995820"
-};
+window._firebaseReady = false;
+window._db = null;
 try {
-  firebase.initializeApp(firebaseConfig);
-  window._db = firebase.firestore();
-  window._firebaseReady = true;
-  console.log('✅ Firebase 연결됨');
+  if(typeof firebase !== 'undefined'){
+    const firebaseConfig = {
+      apiKey: "AIzaSyCdsQxE-t_Tywo6u9LIxo-YcJW4AB7LyTw",
+      authDomain: "congregation-app-817b0.firebaseapp.com",
+      projectId: "congregation-app-817b0",
+      storageBucket: "congregation-app-817b0.firebasestorage.app",
+      messagingSenderId: "750463019617",
+      appId: "1:750463019617:web:e6e534d5dc8ba483995820"
+    };
+    if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    window._db = firebase.firestore();
+    window._firebaseReady = true;
+    console.log('✅ Firebase 연결됨');
+  } else {
+    console.warn('Firebase SDK 미로드 — 로컬 모드');
+  }
 } catch(e) {
-  console.warn('Firebase 오류:', e.message);
-  window._firebaseReady = false;
+  console.warn('Firebase 초기화 실패 — 로컬 모드:', e.message);
 }
 </script>
 
@@ -984,6 +989,15 @@ let SESSION={loggedIn:false,congName:'',userName:'',grade:'pub'};
 const MASTER = { id: 'skw', pw: 'kingdom1914!' };
 
 function doLogin(){
+  // localStorage의 잘못된 members 데이터 정리 (문자열 배열 → 객체 배열)
+  try {
+    const raw = JSON.parse(localStorage.getItem('cong_members'));
+    if(Array.isArray(raw) && raw.length && typeof raw[0] === 'string') {
+      const fixed = raw.map(n => ({name:n, grade:'pub'}));
+      localStorage.setItem('cong_members', JSON.stringify(fixed));
+    }
+  } catch(e) {}
+
   const cong = document.getElementById('li-cong').value.trim();
   const pw   = document.getElementById('li-pw').value.trim();
   const name = document.getElementById('li-name').value.trim();
@@ -1185,7 +1199,20 @@ async function fsLoad(collection) {
   try {
     const snap = await window._db.collection(collection).orderBy('_ts','asc').get();
     if(snap.empty) return null;
-    return snap.docs.map(d => {const data=d.data(); delete data._ts; return data;});
+    return snap.docs
+      .map(d => {
+        const data = d.data();
+        delete data._ts;
+        // members: 숫자 인덱스로 저장된 경우(글자 쪼개짐) 필터
+        if(collection === 'members') {
+          // {name, grade} 구조가 맞는지 확인
+          if(data.name && typeof data.name === 'string' && data.name.length > 0)
+            return {name: data.name, grade: data.grade || 'pub'};
+          return null; // 깨진 데이터 제거
+        }
+        return data;
+      })
+      .filter(item => item !== null && Object.keys(item).length > 0);
   } catch(e) {
     console.warn('fsLoad 오류:', collection, e.message);
     return null;
@@ -1201,12 +1228,25 @@ async function fsSave(collection, arr) {
     // 기존 문서 삭제
     const snap = await col.get();
     snap.docs.forEach(d => batch.delete(d.ref));
-    // 새 문서 추가
+    // 새 문서 추가 (유효한 항목만)
     const ts = Date.now();
-    (arr||[]).forEach((item,i) => {
-      const ref = col.doc(item.id || `doc_${i}`);
-      batch.set(ref, {...item, _ts: ts + i});
-    });
+    (arr||[])
+      .map(item => {
+        // members가 문자열로 들어오면 객체로 변환
+        if(collection === 'members' && typeof item === 'string')
+          return {name: item, grade: 'pub'};
+        return item;
+      })
+      .filter(item => {
+        if(!item || typeof item !== 'object') return false;
+        if(collection === 'members') return item.name && item.name !== 'undefined' && item.name.length > 0;
+        return Object.keys(item).length > 0;
+      })
+      .forEach((item,i) => {
+        const clean = JSON.parse(JSON.stringify(item, (k,v) => v === undefined ? null : v));
+        const ref = col.doc(clean.id || `doc_${i}`);
+        batch.set(ref, {...clean, _ts: ts + i});
+      });
     await batch.commit();
   } catch(e) {
     console.warn('fsSave 오류:', collection, e.message);
@@ -1243,7 +1283,17 @@ async function syncFromFirebase() {
     for(const [localKey, fsCol] of Object.entries(FS_MAP)) {
       if(localKey === 'cong_settings') continue;
       const data = await fsLoad(fsCol);
-      if(data !== null) saveData(localKey, data);
+      if(data !== null) {
+        // members: undefined 항목 제거
+        const clean = localKey === 'cong_members'
+          ? data.filter(m => m && m.name && m.name !== 'undefined')
+          : data;
+        saveData(localKey, clean);
+        // Firestore에도 정리된 데이터로 덮어쓰기 (한 번만)
+        if(localKey === 'cong_members' && clean.length !== data.length) {
+          fsSave(fsCol, clean);
+        }
+      }
     }
     showToast('✅ 동기화 완료');
   } catch(e) {
