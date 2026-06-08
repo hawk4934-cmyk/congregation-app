@@ -636,17 +636,71 @@ select.input-field{cursor:pointer}
 // ═══════════════════════════════════════════════════════════
 // 파서
 // ═══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// 연간 마스터 배정표 파서
+// 구조: 2행=날짜(가로), B열=이름(세로), 교차셀=역할
+// ══════════════════════════════════════════════════════════
+function parseMasterPlan(sheetData) {
+  const cl = v => String(v||'').replace(/\u200b/g,'').replace(/\s+/g,' ').trim();
+  const results = [];
+  if(!sheetData||sheetData.length<3)return results;
+
+  // 2행(index 1): 날짜 수집
+  const dateRow = sheetData[1]||[];
+  const dateMap = {};
+  dateRow.forEach((v,ci)=>{
+    if(!v)return;
+    const s=cl(v);
+    let m=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(m){dateMap[ci]=m[1]+'-'+m[2]+'-'+m[3];return;}
+    m=s.match(/^(\d{4})[\/\.](\d{1,2})[\/\.](\d{1,2})/);
+    if(m)dateMap[ci]=m[1]+'-'+String(+m[2]).padStart(2,'0')+'-'+String(+m[3]).padStart(2,'0');
+  });
+  if(!Object.keys(dateMap).length){console.log('[마스터파서] 날짜행 없음');return results;}
+
+  const ROLE_MAP={'사회':'사회자','보물':'성경에 담긴 보물','연구':'회중 성서 연구',
+    '연구낭독':'회중 성서 연구(낭독)','기도':'기도','필요':'회중의 필요',
+    '10분':'10분 연설','15분':'15분 토의','8분':'8분 연설','7분':'7분 연설',
+    '5분':'5분 연설','4분연설':'4분 연설','성경낭독':'성경 낭독','낭독':'낭독'};
+
+  // 3행~: 이름 + 역할
+  for(let ri=2;ri<sheetData.length;ri++){
+    const row=sheetData[ri]; if(!row)continue;
+    const name=cl(row[1]);
+    if(!name||name.length>10||/^\d/.test(name))continue;
+    Object.entries(dateMap).forEach(([ci,date])=>{
+      const raw=cl(row[+ci]);
+      if(!raw||/^\d+(\.\d+)?$/.test(raw))return;
+      results.push({week:date,date,section:'생활봉사',
+        role:ROLE_MAP[raw]||raw,name,assistant:''});
+    });
+  }
+  console.log('[마스터파서] 날짜수='+Object.keys(dateMap).length+', 추출='+results.length+'건');
+  return results;
+}
+
 function parseSaengBong(sheetData) {
   const cl = v => String(v||'').replace(/\u200b/g,'').replace(/\s+/g,' ').trim();
   const C=2,N=13,O=14,P=15;
   const SECS=['성경에 담긴 보물','야외 봉사에 힘쓰십시오','그리스도인 생활'];
   let TASK_COL=6;
-  for(const row of sheetData.slice(0,25)){
+  taskSearch: for(const row of sheetData.slice(0,40)){
     if(!row)continue;
-    for(let ci=5;ci<=8;ci++){if(/^\d+\./.test(cl(row[ci]))){TASK_COL=ci;break;}}
-    if(TASK_COL!==6)break;
+    for(let ci=4;ci<=11;ci++){
+      const v=cl(row[ci]||'');
+      if(/^\d+\./.test(v)&&v.length>4){TASK_COL=ci;break taskSearch;}
+    }
   }
-  const isWeekHdr=r=>{const ab=cl(r[0])+cl(r[1]);return /\d+월.{0,10}\d+일/.test(ab)&&[5,6,7,8,9].some(ci=>cl(r[ci]).includes('노래'));};
+  console.log('[생봉파서] TASK_COL=',TASK_COL, String.fromCharCode(65+TASK_COL)+'열');
+  const isWeekHdr=r=>{
+    const ab=cl(r[0])+cl(r[1])+cl(r[2]);
+    const hasDate=/\d+월.{0,10}\d+일/.test(ab)||/\d+\s*[~\u2013\-]\s*\d+일/.test(ab);
+    // 노래: 더 넓은 범위에서 찾기 (H열 이후 전체)
+    const hasNore=[4,5,6,7,8,9,10,11].some(ci=>cl(r[ci]||'').includes('노래'));
+    // 사회자: O열(14) 또는 P열(15)에 이름이 있는 행
+    const hasMC=cl(r[14]||'').length>0||cl(r[15]||'').length>0;
+    return hasDate&&(hasNore||hasMC);
+  };
   const isSpecial=r=>[0,1,2,3,4,5,6,7].some(ci=>{const v=cl(r[ci]);return v.includes('순회 대회')||v.includes('지역 대회')||v.includes('특별집회');});
   const isClosing=r=>[0,1,2,3,4,5,6,7].some(ci=>cl(r[ci]).includes('맺음말'));
   const normWeek=row=>{const raw=(cl(row[0])+' '+cl(row[1])).replace(/\u200b/g,'');const m=raw.match(/\d+월\s*\d+[일~\u2013\-]\s*(?:\d+월\s*)?\d+일?/);return m?m[0].replace(/\s+/g,''):raw.replace(/예레미야.*|시편.*/,'').trim().slice(0,18);};
@@ -796,23 +850,33 @@ function parseGongGang(sheetData) {
 
 function detectFileType(filename,sheetData){
   const n=(filename||'').toLowerCase();
-  if(n.includes('생봉')||n.includes('생활봉사')||n.includes('집회'))return 'saengbong';
+  // 파일명으로 우선 판별
+  if(n.includes('생봉')||n.includes('생활봉사'))return 'saengbong';
+  if(n.includes('평일집회')||n.includes('배정표')||(n.includes('계획표')&&!n.includes('공개')))return 'master';
   if(n.includes('공개')||n.includes('강연'))return 'gongggang';
-  let hasDR=false,hasSR=false;
-  for(const row of (sheetData||[]).slice(0,30)){
+
+  // 내용으로 판별 (더 넓은 범위)
+  let hasDR=false,hasSR=false,hasMaet=false;
+  for(const row of (sheetData||[]).slice(0,60)){
     if(!row)continue;
-    const ab=String(row[0]||'')+String(row[1]||'');
-    if(/\d+월.{0,10}\d+일/.test(ab)&&[5,6,7,8,9].some(ci=>String(row[ci]||'').includes('노래')))hasDR=true;
-    const c=String(row[2]||'');
-    if(c.includes('성경')||c.includes('야외')||c.includes('그리스도인'))hasSR=true;
-  }
-  if(hasDR&&hasSR)return 'saengbong';
-  // 공개강연 패턴 감지
-  for(const row of (sheetData||[]).slice(0,10)){
-    if(!row)continue;
+    // 주차 날짜 패턴 (A~C열 어디서든)
+    const abc=String(row[0]||'')+String(row[1]||'')+String(row[2]||'');
+    // 노래: 더 넓은 열에서
+    const hasNore=[4,5,6,7,8,9,10,11].some(ci=>String(row[ci]||'').includes('노래'));
+    // 맺음말: 어느 열에서든
     const rowStr=row.map(v=>String(v||'')).join('');
-    if(rowStr.includes('연사')||rowStr.includes('사회자')&&rowStr.includes('낭독'))return 'gongggang';
+    if(rowStr.includes('맺음말'))hasMaet=true;
+    if(/\d+월.{0,15}\d+일/.test(abc)&&(hasNore||hasMaet))hasDR=true;
+    // 섹션명: 전체 행에서 찾기
+    if(rowStr.includes('성경에 담긴')||rowStr.includes('야외 봉사에')||rowStr.includes('그리스도인 생활'))hasSR=true;
+    // 공개강연
+    if(rowStr.includes('연사')&&(rowStr.includes('낭독')||rowStr.includes('사회')))return 'gongggang';
   }
+  if(hasDR||(hasSR&&hasMaet))return 'saengbong';
+  // 마스터 배정표: 2행에 날짜가 10개 이상 가로로 펼쳐진 패턴
+  const row2=(sheetData||[])[1]||[];
+  const dateCols=row2.filter(v=>String(v||'').match(/^\d{4}-\d{2}-\d{2}|^\d{4}[\/\.]/)).length;
+  if(dateCols>=10)return 'master';
   return 'generic';
 }
 
@@ -1549,6 +1613,7 @@ function buildStep1(){
   <div id="area-file" style="display:none">
     <div class="upload-zone" onclick="document.getElementById('file-input').click()"><div class="uz-icon">📂</div><div class="uz-title">파일 선택</div><div class="uz-sub">.xlsx .xls · 이미지 지원</div></div>
     <input type="file" id="file-input" accept=".xlsx,.xls,.jpg,.jpeg,.png,.gif,.webp" style="display:none" onchange="handleFileSelect(this)">
+    <div id="sheet-selector-wrap" style="display:none;margin-top:10px"></div>
   </div>
   <div id="area-gsheet">
     <div class="form-group"><label class="form-label">구글시트 링크</label><input type="url" class="input-field" id="gsheet-url" placeholder="https://docs.google.com/spreadsheets/d/..." style="font-size:12px"></div>
@@ -1624,25 +1689,115 @@ function parseCSV(text){
 }
 
 function handleFileSelect(input){
-  const file=input.files[0];if(!file)return;
+  const file=input.files[0]; if(!file)return;
   STATE.uploadFile=file;
+  STATE.uploadWorkbook=null;
+  STATE.selectedSheets=[];
   const isExcel=file.name.match(/\.(xlsx|xls)$/i);
   document.getElementById('file-info-text').textContent=`${file.name} (${(file.size/1024).toFixed(1)} KB)`;
   document.getElementById('file-sel-info').style.display='flex';
-  if(!document.getElementById('up-title').value)document.getElementById('up-title').value=file.name.replace(/\.[^.]+$/,'');
+  if(!document.getElementById('up-title').value)
+    document.getElementById('up-title').value=file.name.replace(/\.[^.]+$/,'');
   if(isExcel){
     const reader=new FileReader();
     reader.onload=e=>{
       try{
         const wb=XLSX.read(e.target.result,{type:'array'});
-        const ws=wb.Sheets[wb.SheetNames[0]];
-        STATE.uploadSheetData=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
-        STATE.fileType=detectFileType(file.name,STATE.uploadSheetData);
-        const tl={saengbong:'🎯 생봉 전용 파서',gongggang:'🎤 공개강연 파서',generic:'📋 컬럼 지정'}[STATE.fileType];
-        showToast(`자동 감지: ${tl}`);
-      }catch(e){showToast('엑셀을 읽을 수 없습니다');}
+        STATE.uploadWorkbook=wb;
+        renderSheetSelector(wb.SheetNames);
+      }catch(err){showToast('엑셀을 읽을 수 없습니다');}
     };
     reader.readAsArrayBuffer(file);
+  }
+}
+
+function renderSheetSelector(sheetNames){
+  const wrap=document.getElementById('sheet-selector-wrap');
+  if(!wrap)return;
+  // 시트 1개면 바로 로드
+  if(sheetNames.length===1){
+    loadSheets([sheetNames[0]]);
+    wrap.style.display='none';
+    return;
+  }
+  // 월 관련 시트 자동 감지
+  const monthSheets=sheetNames.filter(s=>/\d+월/.test(s));
+  STATE.selectedSheets=[...monthSheets];
+  wrap.style.display='block';
+  wrap.innerHTML=`
+    <div style="background:var(--g50);border:1px solid var(--g200);border-radius:var(--r2);padding:10px">
+      <div style="font-size:12px;font-weight:700;color:var(--g700);margin-bottom:8px">
+        📑 시트 선택 <span style="font-weight:400;color:var(--g400);font-size:11px">(복수 선택 가능 · 월별 시트 자동 감지)</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+        ${monthSheets.length?`<button class="btn btn-sec" style="font-size:11px;padding:4px 10px" onclick="selectSheets(${JSON.stringify(monthSheets)})">📅 월 시트만</button>`:''}
+        <button class="btn btn-sec" style="font-size:11px;padding:4px 10px" onclick="selectSheets(${JSON.stringify(sheetNames)})">전체</button>
+        <button class="btn btn-sec" style="font-size:11px;padding:4px 10px" onclick="selectSheets([])">해제</button>
+      </div>
+      <div id="sheet-list" style="max-height:160px;overflow-y:auto;border:1px solid var(--g200);border-radius:var(--r);background:#fff;padding:4px">
+        ${sheetNames.map(s=>{
+          const isM=/\d+월/.test(s);
+          return`<label style="display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-radius:6px">
+            <input type="checkbox" value="${s}" ${isM?'checked':''} onchange="onSheetCheck()" style="width:15px;height:15px;accent-color:var(--pri);flex-shrink:0">
+            <span style="font-size:13px;${isM?'font-weight:600;color:var(--pri)':'color:var(--g600)'}">${s}</span>
+            ${isM?'<span class="badge b-blue" style="font-size:9px;margin-left:auto">월별</span>':''}
+          </label>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px">
+        <span style="font-size:11px;color:var(--g400)" id="sheet-sel-count">${monthSheets.length}개 선택됨</span>
+        <button class="btn btn-pri" style="font-size:12px;padding:6px 14px" onclick="confirmSheetSelection()">불러오기 →</button>
+      </div>
+    </div>`;
+}
+
+function onSheetCheck(){
+  const checks=document.querySelectorAll('#sheet-list input[type=checkbox]:checked');
+  STATE.selectedSheets=Array.from(checks).map(cb=>cb.value);
+  const el=document.getElementById('sheet-sel-count');
+  if(el)el.textContent=STATE.selectedSheets.length+'개 선택됨';
+}
+
+function selectSheets(sheets){
+  STATE.selectedSheets=[...sheets];
+  document.querySelectorAll('#sheet-list input[type=checkbox]').forEach(cb=>{
+    cb.checked=sheets.includes(cb.value);
+  });
+  const el=document.getElementById('sheet-sel-count');
+  if(el)el.textContent=sheets.length+'개 선택됨';
+}
+
+function confirmSheetSelection(){
+  if(!STATE.selectedSheets||!STATE.selectedSheets.length){
+    showToast('시트를 1개 이상 선택해주세요'); return;
+  }
+  loadSheets(STATE.selectedSheets);
+}
+
+function loadSheets(sheetList){
+  const wb=STATE.uploadWorkbook;
+  if(!wb){showToast('파일을 다시 선택해주세요');return;}
+  let combined=[];
+  sheetList.forEach(sName=>{
+    const ws=wb.Sheets[sName]; if(!ws)return;
+    const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+    combined=combined.concat(data);
+  });
+  STATE.uploadSheetData=combined;
+  STATE.fileType=detectFileType(STATE.uploadFile.name,combined);
+  const tl={master:'📋 연간 마스터 배정표',saengbong:'🎯 생봉 전용 파서',
+    gongggang:'🎤 공개강연 파서',generic:'📋 컬럼 지정'}[STATE.fileType]||'📋 로드됨';
+  showToast(sheetList.length+'개 시트 로드 — '+tl);
+  // 완료 표시
+  const wrap=document.getElementById('sheet-selector-wrap');
+  if(wrap){
+    const doneEl=document.createElement('div');
+    doneEl.className='alert a-ok';
+    doneEl.style.marginTop='8px';
+    doneEl.innerHTML='<span>✅</span><span>'+sheetList.join(', ')+' ('+combined.length+'행 로드됨)</span>';
+    // 기존 완료 표시 제거 후 추가
+    wrap.querySelectorAll('.alert.a-ok').forEach(el=>el.remove());
+    wrap.appendChild(doneEl);
   }
 }
 
@@ -1657,13 +1812,32 @@ function step1Next(){
   const isImg=STATE.uploadFile.name&&STATE.uploadFile.name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
   if(isImg){saveImagePost();return;}
   if(!STATE.uploadSheetData.length){showToast('데이터를 불러와주세요');return;}
-  if(STATE.fileType==='saengbong'){
+  if(STATE.fileType==='master'){
+    const p=parseMasterPlan(STATE.uploadSheetData);
+    if(!p.length){STATE.fileType='generic';showToast('자동 인식 실패 — 컬럼을 직접 지정해주세요');renderUploadStep(2);return;}
+    STATE.parsedSchedules=p;STATE.parseWarnings=[];renderUploadStep(3);
+  } else if(STATE.fileType==='saengbong'){
     const p=parseSaengBong(STATE.uploadSheetData);
-    if(!p.length){showToast('데이터를 찾을 수 없습니다');return;}
+    if(!p.length){
+      // 디버그: 첫 5행 출력
+      console.log('[생봉파서 실패] 첫 5행:', STATE.uploadSheetData.slice(0,5));
+      console.log('[생봉파서 실패] 총 행수:', STATE.uploadSheetData.length);
+      // 파서 실패 시 컬럼 직접 지정으로 fallback
+      STATE.fileType='generic';
+      showToast('자동 인식 실패 — 컬럼을 직접 지정해주세요');
+      renderUploadStep(2);
+      return;
+    }
     STATE.parsedSchedules=p;STATE.parseWarnings=[];renderUploadStep(3);
   } else if(STATE.fileType==='gongggang'){
     const p=parseGongGang(STATE.uploadSheetData);
-    if(!p.length){showToast('공개강연 데이터를 찾을 수 없습니다');return;}
+    if(!p.length){
+      console.log('[공개강연파서 실패] 첫 5행:', STATE.uploadSheetData.slice(0,5));
+      STATE.fileType='generic';
+      showToast('자동 인식 실패 — 컬럼을 직접 지정해주세요');
+      renderUploadStep(2);
+      return;
+    }
     STATE.parsedSchedules=p;STATE.parseWarnings=[];renderUploadStep(3);
   } else {
     renderUploadStep(2);
