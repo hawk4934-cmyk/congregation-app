@@ -46,6 +46,142 @@
 <!-- SheetJS (엑셀 파싱) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
+<script>
+// ============================================================
+// 생활과 봉사 계획표 전용 파서
+// 원본 파일 구조 그대로 인식:
+//   B열(2): 주차헤더 "1월 6-12일 시편..." / 맺음말
+//   C열(3): 섹션명 (성경에 담긴 보물 / 야외봉사 / 그리스도인 생활)
+//   G열(7): 과제 내용 "1. 대화 시작하기..."
+//   H열(8): 소개말 (주차헤더 행)
+//   N열(14): "(낭독:" 표시
+//   O열(15): 학생/보조/사회자 레이블
+//   P열(16): 주담당 이름
+// ============================================================
+function parseSaengBong(sheetData) {
+  const ZWSP = /\u200b/g;
+  const cl = v => String(v||'').replace(ZWSP,'').replace(/\s+/g,' ').trim();
+
+  const C=2, N=13, O=14, P=15;
+  const SECS = ['성경에 담긴 보물','야외 봉사에 힘쓰십시오','그리스도인 생활'];
+
+  // 과제내용 열 자동감지: G열(6=엑셀) 또는 H열(7=구글시트)
+  let TASK_COL = 6;
+  for (const row of sheetData.slice(0, 25)) {
+    if (!row) continue;
+    for (let ci = 5; ci <= 8; ci++) {
+      if (/^\d+\./.test(cl(row[ci]))) { TASK_COL = ci; break; }
+    }
+    if (TASK_COL !== 6) break;
+  }
+
+  // 주차헤더 판별: A~B열에 "월...일" + 인근열에 "노래"
+  const isWeekHdr = r => {
+    const ab = cl(r[0]) + cl(r[1]);
+    return /\d+월.{0,10}\d+일/.test(ab) &&
+      [5,6,7,8,9].some(ci => cl(r[ci]).includes('노래'));
+  };
+
+  // 특수주간: 순회대회·지역대회 등 (배정 없는 주)
+  const isSpecialWeek = r =>
+    [0,1,2,3,4,5,6,7].some(ci => {
+      const v = cl(r[ci]);
+      return v.includes('순회 대회') || v.includes('지역 대회') || v.includes('특별집회');
+    });
+
+  // 맺음말/기도 행
+  const isClosing = r =>
+    [0,1,2,3,4,5,6,7].some(ci => cl(r[ci]).includes('맺음말'));
+
+  // 주차 날짜 정규화
+  const normalizeWeek = row => {
+    const raw = (cl(row[0])+' '+cl(row[1])).replace(ZWSP,'');
+    const m = raw.match(/\d+월\s*\d+[일~\u2013\-]\s*(?:\d+월\s*)?\d+일?/);
+    return m ? m[0].replace(/\s+/g,'') : raw.replace(/예레미야.*|시편.*/,'').trim().slice(0,18);
+  };
+
+  const results = [];
+  let week='', sec='', skipWeek=false;
+
+  for (const row of sheetData) {
+    if (!row || row.every(v => !cl(v))) continue;
+    const c=cl(row[C]), task=cl(row[TASK_COL]),
+          n=cl(row[N]), o=cl(row[O]), p=cl(row[P]);
+
+    // 1) 주차 헤더
+    if (isWeekHdr(row)) {
+      week = normalizeWeek(row); sec = '';
+      skipWeek = isSpecialWeek(row);
+      if (!skipWeek && p)
+        results.push({week,date:week,section:'진행',role:'사회자',name:p,assistant:''});
+      continue;
+    }
+    if (skipWeek) continue;
+
+    // 2) 맺음말
+    if (isClosing(row)) {
+      if (p) results.push({week,date:week,section:'진행',role:'기도',name:p,assistant:''});
+      continue;
+    }
+
+    // 3) 섹션 감지
+    if (c) {
+      const found = SECS.find(s => c.replace(/\s/g,'').includes(s.replace(/\s/g,'')));
+      if (found) sec = found;
+    }
+
+    // 4) 과제 행
+    if (task && /^\d+\./.test(task)) {
+      const num = task.match(/^(\d+)\./)[1];
+      const content = task.replace(/^\d+\.\s*/,'').trim();
+      const isNakdok = n.includes('낭독');
+      let name='', assistant='';
+
+      if (sec === '야외 봉사에 힘쓰십시오') {
+        name = o || p;
+        assistant = (o && p) ? p : '';
+      } else if (isNakdok) {
+        name=o; assistant=p;
+        results.push({week,date:week,section:sec,
+          role:`${num}번 — ${content} (낭독)`,name:name.trim(),assistant:assistant.trim()});
+        continue;
+      } else {
+        name=p; assistant='';
+      }
+
+      if (name || assistant)
+        results.push({week,date:week,section:sec,
+          role:`${num}번 — ${content}`,name:name.trim(),assistant:assistant.trim()});
+    }
+  }
+
+  console.log(`[생봉파서v2] 과제열=${TASK_COL}(${String.fromCharCode(65+TASK_COL)}열), 추출=${results.length}건`);
+  return results;
+}
+
+// ============================================================
+// 파일 종류 자동 감지
+// ============================================================
+function detectFileType(filename, sheetData) {
+  const name = filename.toLowerCase();
+  if (name.includes('생봉') || name.includes('생활봉사') || name.includes('생활과봉사')
+      || name.includes('집회')) return 'saengbong';
+
+  // 데이터로 판별: 주차헤더 + 섹션명 패턴
+  let hasDateRow=false, hasSectionRow=false;
+  for (const row of (sheetData||[]).slice(0,30)) {
+    if (!row) continue;
+    const ab = String(row[0]||'')+String(row[1]||'');
+    if (/\d+월.{0,10}\d+일/.test(ab) &&
+        [5,6,7,8,9].some(ci => String(row[ci]||'').includes('노래'))) hasDateRow=true;
+    const c = String(row[2]||'');
+    if (c.includes('성경') || c.includes('야외') || c.includes('그리스도인')) hasSectionRow=true;
+  }
+  if (hasDateRow && hasSectionRow) return 'saengbong';
+  return 'generic';
+}
+</script>
+
 <style>
 :root {
   --primary: #2563EB;
@@ -1389,7 +1525,6 @@ function handleFileSelect(input) {
   if (!file) return;
   STATE.uploadFile = file;
   const isExcel = file.name.match(/\.(xlsx|xls)$/i);
-  const isImage = file.name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
   document.getElementById('file-info-text').textContent = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
   document.getElementById('file-selected-info').style.display = 'flex';
   document.getElementById('up-title').value = file.name.replace(/\.[^.]+$/, '');
@@ -1402,6 +1537,10 @@ function handleFileSelect(input) {
         STATE.uploadWorkbook = wb;
         const ws = wb.Sheets[wb.SheetNames[0]];
         STATE.uploadSheetData = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+        // 파일 종류 자동 감지
+        STATE.fileType = detectFileType(file.name, STATE.uploadSheetData);
+        const typeLabel = {saengbong:'🎯 생활봉사 전용 파서 감지됨', generic:'📋 일반 엑셀 — 컬럼 직접 지정'}[STATE.fileType];
+        showToast(typeLabel);
       } catch(err) { showToast('엑셀 파일을 읽을 수 없습니다'); }
     };
     reader.readAsArrayBuffer(file);
@@ -1418,11 +1557,18 @@ function uploadStep1Next() {
   STATE.uploadNote = document.getElementById('up-note').value;
 
   const isExcel = STATE.uploadFile.name.match(/\.(xlsx|xls)$/i);
-  if (isExcel && STATE.uploadSheetData.length) {
-    renderUploadStep(2);
+  if (!isExcel) { saveImagePost(); return; }
+  if (!STATE.uploadSheetData.length) { showToast('파일을 다시 선택해주세요'); return; }
+
+  // 생봉 전용 파서: 컬럼 지정 단계 건너뜀
+  if (STATE.fileType === 'saengbong') {
+    const parsed = parseSaengBong(STATE.uploadSheetData);
+    if (!parsed.length) { showToast('데이터를 찾을 수 없습니다. 파일을 확인해주세요'); return; }
+    STATE.parsedSchedules = parsed;
+    STATE.parseWarnings = [];
+    renderUploadStep(3); // 바로 결과 확인으로
   } else {
-    // 이미지는 바로 저장
-    saveImagePost();
+    renderUploadStep(2); // 일반: 컬럼 지정
   }
 }
 
@@ -1516,73 +1662,85 @@ function uploadStep2Next() {
 }
 
 function renderUploadStep3() {
-  const m = STATE.uploadMapping;
-  const rows = STATE.uploadSheetData.slice(1);
-  const schedules = [];
-  const warnings = [];
+  // 생봉 파서는 이미 STATE.parsedSchedules에 결과가 있음
+  const schedules = STATE.parsedSchedules || [];
+  const warnings  = STATE.parseWarnings  || [];
 
-  rows.forEach((row, idx) => {
-    const date = String(row[m.date] || '').trim();
-    const name = String(row[m.name] || '').trim();
-    const role = String(row[m.role] || '').trim();
-    if (!date && !name && !role) return;
-    if (!name || !date) {
-      warnings.push({ row: idx+2, issue: name ? '날짜 없음' : '이름 없음', raw: row.slice(0,6).join(' | ') });
-      return;
-    }
-    schedules.push({
-      date, name, role,
-      advisor: m.advisor >= 0 ? String(row[m.advisor] || '').trim() : '',
-      assistant: m.assistant >= 0 ? String(row[m.assistant] || '').trim() : '',
+  // 일반 컬럼매핑 방식일 때만 여기서 파싱
+  if (!STATE.fileType || STATE.fileType === 'generic') {
+    const m = STATE.uploadMapping;
+    const rows = STATE.uploadSheetData.slice(1);
+    STATE.parsedSchedules = [];
+    STATE.parseWarnings = [];
+    rows.forEach((row, idx) => {
+      const date = String(row[m.date] || '').trim();
+      const name = String(row[m.name] || '').trim();
+      const role = String(row[m.role] || '').trim();
+      if (!date && !name && !role) return;
+      if (!name || !date) {
+        STATE.parseWarnings.push({ row: idx+2, issue: name ? '날짜 없음' : '이름 없음', raw: row.slice(0,6).join(' | ') });
+        return;
+      }
+      STATE.parsedSchedules.push({
+        date, name, role,
+        advisor: m.advisor >= 0 ? String(row[m.advisor] || '').trim() : '',
+        assistant: m.assistant >= 0 ? String(row[m.assistant] || '').trim() : '',
+      });
     });
-  });
+  }
 
-  STATE.parsedSchedules = schedules;
-  STATE.parseWarnings = warnings;
+  const schedulesFinal = STATE.parsedSchedules;
+  const warningsFinal  = STATE.parseWarnings;
+
+  const sc = schedulesFinal;
+  const wn = warningsFinal;
+  const isSaengbong = STATE.fileType === 'saengbong';
 
   return `
     <div class="step-bar">
       <div class="step-item"><div class="step-circle done">✓</div><div class="step-lbl">선택</div></div>
       <div class="step-line done"></div>
-      <div class="step-item"><div class="step-circle done">✓</div><div class="step-lbl">컬럼</div></div>
+      <div class="step-item"><div class="step-circle done" style="${isSaengbong?'background:var(--success);border-color:var(--success)':''}">✓</div><div class="step-lbl">컬럼</div></div>
       <div class="step-line done"></div>
       <div class="step-item"><div class="step-circle active">3</div><div class="step-lbl active">확인</div></div>
       <div class="step-line"></div>
       <div class="step-item"><div class="step-circle">4</div><div class="step-lbl">저장</div></div>
     </div>
 
+    ${isSaengbong ? '<div class="alert alert-success" style="margin-bottom:12px"><span class="alert-icon">🎯</span><span>생활봉사 전용 파서로 자동 추출됐습니다 — 컬럼 지정 없이 바로 결과를 확인하세요</span></div>' : ''}
+
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
       <div style="background:var(--primary-light);border-radius:var(--radius-md);padding:12px;text-align:center">
-        <div style="font-size:24px;font-weight:700;color:var(--primary)">${schedules.length}</div>
+        <div style="font-size:24px;font-weight:700;color:var(--primary)">${sc.length}</div>
         <div style="font-size:11px;color:#1E40AF;margin-top:2px">추출된 배정</div>
       </div>
-      <div style="background:${warnings.length ? 'var(--warning-light)' : 'var(--success-light)'};border-radius:var(--radius-md);padding:12px;text-align:center">
-        <div style="font-size:24px;font-weight:700;color:${warnings.length ? 'var(--warning)' : 'var(--success)'}">${warnings.length}</div>
-        <div style="font-size:11px;color:${warnings.length ? '#92400E' : '#065F46'};margin-top:2px">확인 필요</div>
+      <div style="background:${wn.length ? 'var(--warning-light)' : 'var(--success-light)'};border-radius:var(--radius-md);padding:12px;text-align:center">
+        <div style="font-size:24px;font-weight:700;color:${wn.length ? 'var(--warning)' : 'var(--success)'}">${wn.length}</div>
+        <div style="font-size:11px;color:${wn.length ? '#92400E' : '#065F46'};margin-top:2px">확인 필요</div>
       </div>
     </div>
 
-    ${warnings.length ? `
-      <div class="alert alert-warning"><span class="alert-icon">⚠️</span><span>${warnings.length}건은 날짜 또는 이름이 없어 제외됩니다</span></div>
+    ${wn.length ? `
+      <div class="alert alert-warning"><span class="alert-icon">⚠️</span><span>${wn.length}건은 날짜 또는 이름이 없어 제외됩니다</span></div>
       <div class="card" style="margin-bottom:12px">
-        ${warnings.slice(0,3).map(w => `<div class="card-item" style="cursor:default"><div style="font-size:12px;color:var(--danger);font-weight:500">${w.row}행 — ${w.issue}</div><div style="font-size:11px;color:var(--gray-400);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${w.raw}</div></div>`).join('')}
-        ${warnings.length > 3 ? `<div style="padding:8px 14px;font-size:12px;color:var(--gray-400)">외 ${warnings.length-3}건...</div>` : ''}
+        ${wn.slice(0,3).map(w => `<div class="card-item" style="cursor:default"><div style="font-size:12px;color:var(--danger);font-weight:500">${w.row}행 — ${w.issue}</div><div style="font-size:11px;color:var(--gray-400);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${w.raw}</div></div>`).join('')}
+        ${wn.length > 3 ? `<div style="padding:8px 14px;font-size:12px;color:var(--gray-400)">외 ${wn.length-3}건...</div>` : ''}
       </div>
-    ` : `<div class="alert alert-success"><span class="alert-icon">✅</span><span>모든 행이 정상 추출되었습니다</span></div>`}
+    ` : `<div class="alert alert-success"><span class="alert-icon">✅</span><span>모든 배정이 정상 추출되었습니다</span></div>`}
 
     <div class="section-label">추출 결과 미리보기</div>
     <div class="table-wrap" style="margin-bottom:14px">
       <table class="preview-table">
-        <thead><tr><th>날짜</th><th>이름</th><th>역할</th>${schedules[0]?.advisor !== undefined ? '<th>조언자</th>' : ''}</tr></thead>
+        <thead><tr><th>주차</th><th>이름</th><th>역할 / 과제</th><th>보조</th></tr></thead>
         <tbody>
-          ${schedules.slice(0,6).map(s => `<tr><td>${s.date}</td><td>${s.name}</td><td>${s.role}</td>${s.advisor !== undefined ? `<td>${s.advisor}</td>` : ''}</tr>`).join('')}
-          ${schedules.length > 6 ? `<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:8px">외 ${schedules.length-6}건</td></tr>` : ''}
+          ${sc.slice(0,8).map(s => `<tr><td>${s.date||s.week||''}</td><td style="font-weight:600">${s.name}</td><td>${(s.role||'').replace(/^\d+번 — /,'')}</td><td style="color:var(--primary)">${s.assistant||''}</td></tr>`).join('')}
+          ${sc.length > 8 ? `<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:8px">외 ${sc.length-8}건</td></tr>` : ''}
         </tbody>
       </table>
     </div>
 
     <div style="display:flex;gap:8px">
-      <button class="btn btn-secondary" onclick="renderUploadStep(2)" style="flex:1">← 컬럼 재설정</button>
+      <button class="btn btn-secondary" onclick="renderUploadStep(STATE.fileType==='saengbong'?1:2)" style="flex:1">← ${STATE.fileType==='saengbong'?'처음으로':'컬럼 재설정'}</button>
       <button class="btn btn-primary" onclick="saveExcelPost()" style="flex:2">저장하기</button>
     </div>
   `;
