@@ -266,7 +266,11 @@ select.input-field{cursor:pointer}
     </div>
     <div class="login-field">
       <label class="login-label">내 이름</label>
-      <input class="login-input" id="li-name" placeholder="예: 홍길동" type="text" onkeydown="if(event.key==='Enter')doLogin()">
+      <input class="login-input" id="li-name" placeholder="예: 홍길동" type="text" oninput="checkPinRequired()" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <div class="login-field" id="pin-field" style="display:none">
+      <label class="login-label">개인 PIN <span style="font-size:10px;color:rgba(255,255,255,.5)">장로·봉사의종 권한 확인용</span></label>
+      <input class="login-input" id="li-pin" placeholder="PIN 입력" type="password" maxlength="10" onkeydown="if(event.key==='Enter')doLogin()">
     </div>
     <button class="login-btn" onclick="doLogin()">로그인</button>
     <div class="login-err" id="login-err"></div>
@@ -586,13 +590,16 @@ select.input-field{cursor:pointer}
     <div class="modal-title">형제 명단 · 등급 관리</div>
     <div class="modal-body">
       <div class="alert a-info" style="font-size:11px">등급: 장로(모든권한) · 봉사의종(일반+자료실) · 전도인(일반)</div>
-      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">
         <input type="text" class="input-field" id="new-member-name" placeholder="이름" style="flex:1;min-width:80px">
         <select class="input-field" id="new-member-grade" style="flex:1;min-width:90px">
           <option value="pub">전도인</option>
           <option value="ms">봉사의종</option>
           <option value="elder">장로</option>
         </select>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input type="text" class="input-field" id="new-member-pin" placeholder="개인 PIN (장로·봉사의종 권장)" style="flex:1;font-size:13px">
         <button class="btn btn-pri" onclick="addMember()" style="padding:10px 14px">추가</button>
       </div>
       <div id="member-list" style="max-height:360px;overflow-y:auto"></div>
@@ -721,22 +728,23 @@ function parseSaengBong(sheetData) {
     if(b||g||o||p) console.log(`  행${i+1}: B="${b.slice(0,20)}" G="${g.slice(0,20)}" O="${o}" P="${p}"`);
   });
 
-  // 과제내용 열 자동 감지 (기본 G열=6)
+  // 과제내용 열 자동 감지 (G열=6 기본, 최소 6열 이상에서 탐색)
   let TASK_COL = 6;
   taskSearch: for(const row of sheetData.slice(0,40)){
     if(!row) continue;
-    for(let ci=4;ci<=11;ci++){
+    for(let ci=6;ci<=10;ci++){  // G열(6)부터 K열(10)까지만
       const v=cl(row[ci]||'');
-      if(/^\d+\./.test(v)&&v.length>4){TASK_COL=ci;break taskSearch;}
+      if(/^\d+\./.test(v)&&v.length>5){TASK_COL=ci;break taskSearch;}
     }
   }
+  console.log('[생봉파서v3] TASK_COL='+TASK_COL+'('+String.fromCharCode(65+TASK_COL)+'열)');
 
-  // 주차 헤더 판별: B열에 날짜 + 인근열에 노래
+  // 주차 헤더 판별: B열에 날짜 + H열(7)에 "노래"
   const isWeekHdr = r => {
-    // B열(index 1)에서 앞뒤 공백 제거 후 날짜 패턴 확인
     const b = cl(r[1]||'');
     const hasDate = /\d+월.{0,15}\d+일/.test(b) || /\d+월.{0,5}\d+[일\-~]/.test(b);
-    const hasNore = [4,5,6,7,8,9,10,11].some(ci=>cl(r[ci]||'').includes('노래'));
+    // H열(index 7)에 "노래"가 있는지 확인 (더 넓게도 체크)
+    const hasNore = [6,7,8,9,10].some(ci=>cl(r[ci]||'').includes('노래'));
     return hasDate && hasNore;
   };
 
@@ -751,9 +759,9 @@ function parseSaengBong(sheetData) {
   const isClosing = r =>
     [0,1,2,3,4,5,6,7].some(ci=>cl(r[ci]||'').includes('맺음말'));
 
-  // 주차 날짜 정규화 — B열(index 1) 기준
+  // 주차 날짜 정규화 — B열(index 1) 기준, 앞뒤 공백 완전 제거
   const normWeek = row => {
-    const raw = cl(row[1]||'');
+    const raw = cl(row[1]||'').replace(/^\s+/,'');
     const m = raw.match(/\d+월\s*\d+[일~\u2013\-]\s*(?:\d+월\s*)?\d+일?/);
     return m ? m[0].replace(/\s+/g,'') : raw.replace(/예레미야.*|시편.*/,'').trim().slice(0,20);
   };
@@ -986,6 +994,15 @@ let SESSION={loggedIn:false,congName:'',userName:'',grade:'pub'};
 // ── 마스터 계정 (하드코딩 슈퍼관리자) ──
 const MASTER = { id: 'skw', pw: 'kingdom1914!' };
 
+// 이름 입력 시 PIN 필요 여부 체크
+function checkPinRequired(){
+  const name = document.getElementById('li-name').value.trim();
+  const members = loadData('cong_members',[]);
+  const me = members.find(m=>m.name===name);
+  const needPin = me && (me.grade==='elder'||me.grade==='ms') && me.pin;
+  document.getElementById('pin-field').style.display = needPin ? 'block' : 'none';
+}
+
 function doLogin(){
   // localStorage의 잘못된 members 데이터 정리 (문자열 배열 → 객체 배열)
   try {
@@ -1026,9 +1043,17 @@ function doLogin(){
   if(s.name !== cong){ errEl.textContent='회중 이름이 올바르지 않습니다'; return; }
   if(s.password !== pw){ errEl.textContent='비밀번호가 올바르지 않습니다'; return; }
 
-  // 등급 확인
+  // 등급 확인 + PIN 검증
   const members = loadData('cong_members', []);
   const me = members.find(m => m.name === name);
+  const pin = document.getElementById('li-pin')?.value || '';
+
+  // PIN이 설정된 장로·봉사의종은 PIN 검증
+  if(me && (me.grade==='elder'||me.grade==='ms') && me.pin) {
+    if(!pin){ errEl.textContent='PIN을 입력해주세요'; return; }
+    if(pin !== me.pin){ errEl.textContent='PIN이 올바르지 않습니다'; return; }
+  }
+
   SESSION = { loggedIn:true, congName:cong, userName:name, grade: me ? me.grade : 'pub', isMaster:false };
   saveData('cong_session', SESSION);
   errEl.textContent = '';
@@ -1355,7 +1380,10 @@ function switchTab(tab){
   // 내 일정 탭 → 자동으로 내 이름 검색
   if(tab==='personal') initPersonalTab();
   const fab=document.getElementById('fab');
-  fab.style.display=(tab==='board'||tab==='library')?canUpload()?'flex':'none':(tab==='settings')?canSeeSettings()?'flex':'none':'none';
+  if(tab==='board'||tab==='library') fab.style.display=canUpload()?'flex':'none';
+  else if(tab==='official') fab.style.display=canManageEvents()?'flex':'none';
+  else if(tab==='settings') fab.style.display=canSeeSettings()?'flex':'none';
+  else fab.style.display='none';
   // 마스터 초기설정 배너
   const banner=document.getElementById('master-setup-banner');
   if(banner){
@@ -1368,6 +1396,10 @@ function switchTab(tab){
 function onFabClick(){
   if(STATE.currentTab==='board'||STATE.currentTab==='settings')openUploadModal();
   else if(STATE.currentTab==='library')openLibUploadModal();
+  else if(STATE.currentTab==='official'){
+    if(!canManageEvents()){showToast('장로 이상만 일정을 추가할 수 있습니다');return;}
+    openModal('evt-add-modal');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1647,16 +1679,22 @@ function renderPersonal(q){
   }
 
   // 날짜 정규화 후 정렬
+  const today = new Date();
+  today.setHours(0,0,0,0);
   all.forEach(s=>{
     const parsed=s.date?parseFlexDate(s.date):null;
     s._dateStr=parsed?parsed.dateStr||s.date:s.date||'';
     s._parsed=parsed;
+    // 날짜 객체
+    s._dateObj = s._dateStr.match(/^\d{4}-\d{2}-\d{2}$/) ? new Date(s._dateStr+'T00:00:00') : null;
   });
-  all.sort((a,b)=>a._dateStr.localeCompare(b._dateStr));
+  // 오늘 이후 일정만 (지난 일정 제외)
+  const filtered = all.filter(s => !s._dateObj || s._dateObj >= today);
+  filtered.sort((a,b)=>a._dateStr.localeCompare(b._dateStr));
 
   // 날짜별 그룹핑 (같은 날 중복 일정 직렬 표시)
   const byDate={};
-  all.forEach(s=>{
+  filtered.forEach(s=>{
     const dk=s._dateStr||'미정';
     if(!byDate[dk])byDate[dk]={dateStr:dk,parsed:s._parsed,items:[]};
     byDate[dk].items.push(s);
@@ -1664,12 +1702,12 @@ function renderPersonal(q){
 
   // 카테고리 요약 (헤더용)
   const catCounts={};
-  all.forEach(s=>{catCounts[s.postCat]=(catCounts[s.postCat]||0)+1;});
+  filtered.forEach(s=>{catCounts[s.postCat]=(catCounts[s.postCat]||0)+1;});
   const catSummary=Object.entries(catCounts).map(([k,v])=>`<span class="badge ${CAT_BADGE[k]||'b-gray'}" style="margin-right:4px">${k} ${v}건</span>`).join('');
 
   // 전체 요약 헤더
   let html=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-    <span style="font-size:13px;font-weight:700;color:var(--g700)">총 ${all.length}건</span>
+    <span style="font-size:13px;font-weight:700;color:var(--g700)">총 ${filtered.length}건 (예정)</span>
     ${catSummary}
   </div>`;
 
@@ -1679,16 +1717,15 @@ function renderPersonal(q){
     const hasMultiple=group.items.length>1;
     return`<div class="my-card">
       <div class="my-hdr" style="background:${hasMultiple?'#FFF8E1':'var(--g50)'}">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div class="sched-date">
-            ${d?`<div class="d" style="font-size:18px">${d.day}</div><div class="w">${DAYS[d.dow]}</div>`
-              :`<div class="d" style="font-size:12px">${group.dateStr.slice(0,7)}</div>`}
-          </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          ${d && group.dateStr.match(/^\d{4}-\d{2}-\d{2}$/) ? `
+          <div style="text-align:center;min-width:52px">
+            <div style="font-size:11px;color:var(--g400);font-weight:600">${new Date(group.dateStr+'T00:00:00').getFullYear()}년 ${new Date(group.dateStr+'T00:00:00').getMonth()+1}월</div>
+            <div style="font-size:28px;font-weight:800;color:var(--pri);line-height:1">${d.day}</div>
+            <div style="font-size:11px;color:var(--g500);font-weight:600">${DAYS[d.dow]}요일</div>
+          </div>` : `<div style="font-size:13px;color:var(--g600)">${group.dateStr}</div>`}
           <div>
-            <div style="font-size:12px;font-weight:600;color:var(--g600)">${
-              d?`${new Date(group.dateStr+'T00:00:00').getFullYear()}년 ${d?new Date(group.dateStr+'T00:00:00').getMonth()+1:'-'}월 ${d.day}일 (${DAYS[d.dow]})`:group.dateStr
-            }</div>
-            ${hasMultiple?`<div style="font-size:10px;color:var(--warn);font-weight:600">중복 ${group.items.length}건</div>`:''}
+            ${hasMultiple?`<div style="font-size:10px;color:var(--warn);font-weight:700">⚠ 중복 ${group.items.length}건</div>`:''}
           </div>
         </div>
         <span class="badge ${hasMultiple?'b-amber':'b-gray'}" style="font-size:10px">${group.items.length}건</span>
@@ -2034,7 +2071,7 @@ function loadSheets(sheetList){
   sheetList.forEach(sName=>{
     const ws=wb.Sheets[sName]; if(!ws)return;
     // raw:false → 날짜/숫자를 문자열로 변환, defval:'' → 빈셀 처리
-    const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
+    const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
     console.log(`[시트 ${sName}] ${data.length}행 로드`);
     // 처음 15행 디버그 출력
     data.slice(0,15).forEach((row,i)=>{
@@ -2319,12 +2356,16 @@ function saveNotice(){
 function addMember(){
   const name=document.getElementById('new-member-name').value.trim();
   const grade=document.getElementById('new-member-grade').value;
+  const pin=document.getElementById('new-member-pin')?.value.trim()||'';
   if(!name){showToast('이름을 입력해주세요');return;}
   const members=DB.members;
   const idx=members.findIndex(m=>m.name===name);
-  if(idx>=0){members[idx].grade=grade;}else{members.push({name,grade});}
+  const entry={name,grade};
+  if(pin) entry.pin=pin;
+  if(idx>=0){members[idx]={...members[idx],...entry};}else{members.push(entry);}
   DB.members=members;renderMemberList();updateMemberCountLabel();
   document.getElementById('new-member-name').value='';
+  if(document.getElementById('new-member-pin')) document.getElementById('new-member-pin').value='';
 }
 
 function removeMember(name){
@@ -2335,20 +2376,39 @@ function setGrade(name,grade){
   const members=DB.members;const idx=members.findIndex(m=>m.name===name);
   if(idx>=0){members[idx].grade=grade;DB.members=members;renderMemberList();}
 }
+function setPin(name,pin){
+  const members=DB.members;const idx=members.findIndex(m=>m.name===name);
+  if(idx>=0){
+    if(pin.trim()) members[idx].pin=pin.trim();
+    else delete members[idx].pin;
+    DB.members=members;
+    showToast(pin.trim()?'PIN 설정됨':'PIN 삭제됨');
+    renderMemberList();
+  }
+}
 
 function renderMemberList(){
   const el=document.getElementById('member-list');
   const members=DB.members;
   if(!members.length){el.innerHTML=`<div style="text-align:center;color:var(--g400);font-size:13px;padding:20px">등록된 형제가 없습니다</div>`;return;}
   el.innerHTML=members.map(m=>`
-    <div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--g100)">
-      <span style="font-size:14px;flex:1">${m.name}</span>
-      <select style="font-size:12px;padding:4px 6px;border:1px solid var(--g200);border-radius:var(--r);background:#fff;font-family:var(--font)" onchange="setGrade('${m.name}',this.value)">
-        <option value="pub" ${m.grade==='pub'?'selected':''}>전도인</option>
-        <option value="ms" ${m.grade==='ms'?'selected':''}>봉사의종</option>
-        <option value="elder" ${m.grade==='elder'?'selected':''}>장로</option>
-      </select>
-      <button onclick="removeMember('${m.name}')" style="border:none;background:none;color:var(--err);font-size:13px;cursor:pointer;padding:4px 8px">삭제</button>
+    <div style="border-bottom:1px solid var(--g100);padding:8px 0">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:${m.grade!=='pub'?'5':'0'}px">
+        <span style="font-size:14px;flex:1;font-weight:500">${m.name}</span>
+        <select style="font-size:12px;padding:4px 6px;border:1px solid var(--g200);border-radius:var(--r);background:#fff;font-family:var(--font)" onchange="setGrade('${m.name}',this.value)">
+          <option value="pub" ${m.grade==='pub'?'selected':''}>전도인</option>
+          <option value="ms" ${m.grade==='ms'?'selected':''}>봉사의종</option>
+          <option value="elder" ${m.grade==='elder'?'selected':''}>장로</option>
+        </select>
+        <button onclick="removeMember('${m.name}')" style="border:none;background:none;color:var(--err);font-size:13px;cursor:pointer;padding:4px 8px">삭제</button>
+      </div>
+      ${m.grade!=='pub'?`<div style="display:flex;align-items:center;gap:6px;padding-left:2px">
+        <span style="font-size:11px;color:var(--g400);min-width:28px">PIN:</span>
+        <input type="password" value="${m.pin||''}" placeholder="PIN 미설정" maxlength="10"
+          style="font-size:12px;padding:3px 8px;border:1px solid var(--g200);border-radius:6px;width:90px;font-family:var(--font)"
+          onchange="setPin('${m.name}',this.value)">
+        <span style="font-size:10px;color:${m.pin?'var(--ok)':'var(--g400)'}">${m.pin?'🔒 설정됨':'미설정'}</span>
+      </div>`:''}
     </div>`).join('');
 }
 
