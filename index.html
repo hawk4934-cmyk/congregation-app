@@ -716,102 +716,96 @@ function parseMasterPlan(sheetData) {
 }
 
 function parseSaengBong(sheetData) {
-  const cl = v => String(v||'').replace(/\u200b/g,'').replace(/\s+/g,' ').trim();
-  const C=2, N=13, O=14, P=15;
+  // v4 - SheetJS row 길이 가변 대응, 셀 안전 접근
+  const cl = v => String(v == null ? '' : v).replace(/\u200b/g,'').replace(/\s+/g,' ').trim();
+  // 안전한 셀 접근 (undefined/null 모두 처리)
+  const cell = (row, ci) => cl(row && row.length > ci ? row[ci] : '');
+
   const SECS = ['성경에 담긴 보물','야외 봉사에 힘쓰십시오','그리스도인 생활'];
 
-  // 디버그: 첫 15행 주요 열 출력
-  console.log('[생봉파서v3] 총행수:', sheetData.length);
-  sheetData.slice(0,15).forEach((row,i)=>{
-    if(!row) return;
-    const b=cl(row[1]||''), g=cl(row[6]||''), o=cl(row[14]||''), p=cl(row[15]||'');
-    if(b||g||o||p) console.log(`  행${i+1}: B="${b.slice(0,20)}" G="${g.slice(0,20)}" O="${o}" P="${p}"`);
-  });
-
-  // 과제내용 열 자동 감지 (G열=6 기본, 최소 6열 이상에서 탐색)
-  let TASK_COL = 6;
-  taskSearch: for(const row of sheetData.slice(0,40)){
-    if(!row) continue;
-    for(let ci=6;ci<=10;ci++){  // G열(6)부터 K열(10)까지만
-      const v=cl(row[ci]||'');
-      if(/^\d+\./.test(v)&&v.length>5){TASK_COL=ci;break taskSearch;}
-    }
-  }
-  console.log('[생봉파서v3] TASK_COL='+TASK_COL+'('+String.fromCharCode(65+TASK_COL)+'열)');
-
-  // 주차 헤더 판별: B열에 날짜 + H열(7)에 "노래"
+  // 주차 헤더: B열(1)에 "X월 X-Y일" + H열(7) 또는 인근에 "노래"
   const isWeekHdr = r => {
-    const b = cl(r[1]||'');
+    const b = cell(r, 1);
     const hasDate = /\d+월.{0,15}\d+일/.test(b) || /\d+월.{0,5}\d+[일\-~]/.test(b);
-    // H열(index 7)에 "노래"가 있는지 확인 (더 넓게도 체크)
-    const hasNore = [6,7,8,9,10].some(ci=>cl(r[ci]||'').includes('노래'));
+    const hasNore = [6,7,8,9,10].some(ci => cell(r,ci).includes('노래'));
     return hasDate && hasNore;
   };
 
-  // 특수 주간 판별
-  const isSpecial = r =>
-    Array.from({length:16},(_,i)=>i).some(ci=>{
-      const v=cl(r[ci]||'');
-      return v.includes('순회 대회')||v.includes('지역 대회')||v.includes('특별집회');
-    });
+  // 특수주간
+  const isSpecial = r => {
+    for(let ci=0; ci<16; ci++){
+      const v = cell(r,ci);
+      if(v.includes('순회 대회')||v.includes('지역 대회')||v.includes('특별집회')) return true;
+    }
+    return false;
+  };
 
-  // 맺음말 판별: B열~H열 어디에서든 "맺음말"
-  const isClosing = r =>
-    [0,1,2,3,4,5,6,7].some(ci=>cl(r[ci]||'').includes('맺음말'));
+  // 맺음말
+  const isClosing = r => [0,1,2,3,4,5,6,7].some(ci => cell(r,ci).includes('맺음말'));
 
-  // 주차 날짜 정규화 — B열(index 1) 기준, 앞뒤 공백 완전 제거
-  const normWeek = row => {
-    const raw = cl(row[1]||'').replace(/^\s+/,'');
+  // 주차 정규화
+  const normWeek = r => {
+    const raw = cell(r,1);
     const m = raw.match(/\d+월\s*\d+[일~\u2013\-]\s*(?:\d+월\s*)?\d+일?/);
     return m ? m[0].replace(/\s+/g,'') : raw.replace(/예레미야.*|시편.*/,'').trim().slice(0,20);
   };
 
-  const results=[]; let week='',sec='',skip=false;
+  // TASK_COL: G열(6)부터 탐색
+  let TASK_COL = 6;
+  for(const row of sheetData.slice(0,40)){
+    let found = false;
+    for(let ci=6; ci<=10; ci++){
+      const v = cell(row,ci);
+      if(/^\d+\./.test(v) && v.length > 5){ TASK_COL=ci; found=true; break; }
+    }
+    if(found) break;
+  }
+  console.log('[생봉v4] TASK_COL='+TASK_COL+'('+String.fromCharCode(65+TASK_COL)+'열), 총행수='+sheetData.length);
+
+  const results=[]; let week='', sec='', skip=false;
 
   for(const row of sheetData){
-    if(!row||row.every(v=>!cl(v)))continue;
-    const cVal=cl(row[C]||'');
-    const task=cl(row[TASK_COL]||'');
-    const nVal=cl(row[N]||'');
-    const oVal=cl(row[O]||'');
-    const pVal=cl(row[P]||'');
+    if(!row || row.every(v => !cl(v))) continue;
+
+    const b    = cell(row,1);
+    const cVal = cell(row,2);
+    const task = cell(row,TASK_COL);
+    const nVal = cell(row,13);
+    const oVal = cell(row,14);
+    const pVal = cell(row,15);
 
     // 1) 주차 헤더
     if(isWeekHdr(row)){
-      week=normWeek(row); sec=''; skip=isSpecial(row);
-      // 사회자: O열에 "사회자" 있고 P열에 이름
+      week = normWeek(row); sec = ''; skip = isSpecial(row);
       if(!skip && pVal && oVal.includes('사회자'))
         results.push({week,date:week,section:'진행',role:'사회자',name:pVal,assistant:''});
       continue;
     }
-    if(skip)continue;
+    if(skip) continue;
 
     // 2) 맺음말/기도
     if(isClosing(row)){
-      if(pVal)
-        results.push({week,date:week,section:'진행',role:'기도',name:pVal,assistant:''});
+      if(pVal) results.push({week,date:week,section:'진행',role:'기도',name:pVal,assistant:''});
       continue;
     }
 
     // 3) 섹션 감지
     if(cVal){
-      const found=SECS.find(s=>cVal.replace(/\s/g,'').includes(s.replace(/\s/g,'')));
-      if(found)sec=found;
+      const found = SECS.find(s => cVal.replace(/\s/g,'').includes(s.replace(/\s/g,'')));
+      if(found) sec = found;
     }
 
     // 4) 과제 행
-    if(task&&/^\d+\./.test(task)){
-      const num=task.match(/^(\d+)\./)[1];
-      const content=task.replace(/^\d+\.\s*/,'').trim();
-      const isNak=nVal.includes('낭독');
-      let name='',assistant='';
+    if(task && /^\d+\./.test(task)){
+      const num = task.match(/^(\d+)\./)[1];
+      const content = task.replace(/^\d+\.\s*/,'').trim();
+      const isNak = nVal.includes('낭독');
+      let name='', assistant='';
 
       if(sec==='야외 봉사에 힘쓰십시오'){
-        // O열=학생(담당), P열=보조
-        name=oVal||pVal;
-        assistant=(oVal&&pVal)?pVal:'';
+        name = oVal || pVal;
+        assistant = (oVal && pVal) ? pVal : '';
       } else if(isNak){
-        // 낭독행: O열=낭독자, P열=보조낭독
         name=oVal; assistant=pVal;
         results.push({week,date:week,section:sec,
           role:num+'번 — '+content+' (낭독)',name:name.trim(),assistant:assistant.trim()});
@@ -819,14 +813,12 @@ function parseSaengBong(sheetData) {
       } else {
         name=pVal; assistant='';
       }
-
-      if(name||assistant)
+      if(name || assistant)
         results.push({week,date:week,section:sec,
           role:num+'번 — '+content,name:name.trim(),assistant:assistant.trim()});
     }
   }
-
-  console.log('[생봉파서v3] TASK_COL='+TASK_COL+'('+String.fromCharCode(65+TASK_COL)+'열), 추출='+results.length+'건');
+  console.log('[생봉v4] 추출='+results.length+'건');
   return results;
 }
 
@@ -1054,7 +1046,13 @@ function doLogin(){
     if(pin !== me.pin){ errEl.textContent='PIN이 올바르지 않습니다'; return; }
   }
 
-  SESSION = { loggedIn:true, congName:cong, userName:name, grade: me ? me.grade : 'pub', isMaster:false };
+  // 방향 B: PIN 설정 안 된 장로/봉사의종은 전도인으로 입장
+  let effectiveGrade = me ? me.grade : 'pub';
+  if(me && (me.grade==='elder'||me.grade==='ms') && !me.pin){
+    effectiveGrade = 'pub'; // PIN 미설정 → 전도인으로
+    setTimeout(()=>showToast('⚠ PIN 미설정 — 전도인 권한으로 입장. 관리자에게 PIN 설정을 요청하세요.'),800);
+  }
+  SESSION = { loggedIn:true, congName:cong, userName:name, grade:effectiveGrade, isMaster:false };
   saveData('cong_session', SESSION);
   errEl.textContent = '';
   startApp();
