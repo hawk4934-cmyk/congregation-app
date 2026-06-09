@@ -274,9 +274,13 @@ select.input-field{cursor:pointer}
     </div>
     <button class="login-btn" onclick="doLogin()">로그인</button>
     <div class="login-err" id="login-err"></div>
-    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--g200);text-align:center">
-      <div style="font-size:11px;color:var(--g400);line-height:1.7">
-        처음 사용 시 마스터 계정은 이름 없이<br>회중 이름+비밀번호만 입력하세요
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--g200)">
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sec" style="flex:1;font-size:12px;padding:8px" onclick="switchLoginMode('login')">로그인</button>
+        <button class="btn btn-sec" style="flex:1;font-size:12px;padding:8px" onclick="switchLoginMode('register')">PIN 최초 등록</button>
+      </div>
+      <div id="login-mode-hint" style="font-size:11px;color:var(--g400);text-align:center;margin-top:8px;line-height:1.6">
+        마스터: 회중이름+비밀번호만 입력
       </div>
     </div>
   </div>
@@ -408,26 +412,33 @@ select.input-field{cursor:pointer}
         </div>
       </div>
 
-      <!-- 장로 이상: 공지·명단 -->
+      <!-- 장로 이상: 공지·일정 -->
       <div id="sec-elder-settings" style="display:none">
         <div class="sec-lbl">회중 관리 <span style="font-size:10px;color:var(--g400);font-weight:400">장로 이상</span></div>
         <div class="card">
-          <div class="set-row" onclick="canSetNotice()?openModal('notice-modal'):showToast('장로 이상만 가능합니다')">
+          <div class="set-row" onclick="openModal('notice-modal')">
             <div style="display:flex;align-items:center;gap:10px">
               <div class="set-icon" style="background:#FFFBEB">📢</div>
               <div><div style="font-size:14px;font-weight:500">공지 배너</div><div style="font-size:11px;color:var(--g400)">상단 공지 설정</div></div>
             </div><span style="color:var(--g300);font-size:18px">›</span>
           </div>
-          <div class="set-row" onclick="canManageMembers()?openModal('members-modal'):showToast('장로 이상만 가능합니다')">
-            <div style="display:flex;align-items:center;gap:10px">
-              <div class="set-icon" style="background:#F5F3FF">👥</div>
-              <div><div style="font-size:14px;font-weight:500">형제 명단 · 등급 관리</div><div style="font-size:11px;color:var(--g400)" id="set-member-count">0명</div></div>
-            </div><span style="color:var(--g300);font-size:18px">›</span>
-          </div>
-          <div class="set-row" onclick="canManageEvents()?openModal('evt-add-modal'):showToast('장로 이상만 가능합니다')">
+          <div class="set-row" onclick="openModal('evt-add-modal')">
             <div style="display:flex;align-items:center;gap:10px">
               <div class="set-icon" style="background:#FFFBEB">📅</div>
               <div><div style="font-size:14px;font-weight:500">공식 일정 추가</div><div style="font-size:11px;color:var(--g400)">전체공개 / 장로전용</div></div>
+            </div><span style="color:var(--g300);font-size:18px">›</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 마스터 전용: 형제 명단 -->
+      <div id="sec-master-members" style="display:none">
+        <div class="sec-lbl">형제 명단 <span style="font-size:10px;color:var(--err);font-weight:400">마스터 전용</span></div>
+        <div class="card">
+          <div class="set-row" onclick="openModal('members-modal')">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div class="set-icon" style="background:#F5F3FF">👥</div>
+              <div><div style="font-size:14px;font-weight:500">형제 명단 · 등급 관리</div><div style="font-size:11px;color:var(--g400)" id="set-member-count">0명</div></div>
             </div><span style="color:var(--g300);font-size:18px">›</span>
           </div>
         </div>
@@ -1028,6 +1039,28 @@ let SESSION={loggedIn:false,congName:'',userName:'',grade:'pub'};
 const MASTER = { id: 'skw', pw: 'kingdom1914!' };
 
 // 이름 입력 시 PIN 필요 여부 체크
+function switchLoginMode(mode){
+  STATE.loginMode = mode;
+  const isReg = mode==='register';
+  const pinField = document.getElementById('pin-field');
+  const hint = document.getElementById('login-mode-hint');
+  if(isReg){
+    // 등록 모드: 이름 + 새 PIN 설정
+    if(pinField){
+      pinField.style.display='block';
+      const label = pinField.querySelector('label');
+      if(label) label.innerHTML='새 PIN 설정 <span style="font-size:10px;color:rgba(255,255,255,.5)">4자리 이상</span>';
+      const input = document.getElementById('li-pin');
+      if(input) input.placeholder='새 PIN 입력 (4자리 이상)';
+    }
+    if(hint) hint.textContent='명단에 등록된 이름으로 PIN을 최초 설정합니다';
+  } else {
+    // 로그인 모드
+    checkPinRequired();
+    if(hint) hint.textContent='마스터: 회중이름+비밀번호만 입력';
+  }
+}
+
 function checkPinRequired(){
   const name = document.getElementById('li-name').value.trim();
   const members = loadData('cong_members',[]);
@@ -1037,7 +1070,6 @@ function checkPinRequired(){
 }
 
 function doLogin(){
-  // localStorage의 잘못된 members 데이터 정리 (문자열 배열 → 객체 배열)
   try {
     const raw = JSON.parse(localStorage.getItem('cong_members'));
     if(Array.isArray(raw) && raw.length && typeof raw[0] === 'string') {
@@ -1045,13 +1077,49 @@ function doLogin(){
       localStorage.setItem('cong_members', JSON.stringify(fixed));
     }
   } catch(e) {}
-
   const cong = document.getElementById('li-cong').value.trim();
   const pw   = document.getElementById('li-pw').value.trim();
   const name = document.getElementById('li-name').value.trim();
   const errEl = document.getElementById('login-err');
 
   if(!cong || !pw){ errEl.textContent='회중 이름과 비밀번호를 입력해주세요'; return; }
+
+  // PIN 최초 등록 모드
+  if(STATE.loginMode === 'register'){
+    doRegisterPin(cong, pw);
+    return;
+  }
+
+// PIN 최초 등록 처리
+function doRegisterPin(cong, pw){
+  const errEl = document.getElementById('login-err');
+  const name = document.getElementById('li-name').value.trim();
+  const pin = document.getElementById('li-pin')?.value || '';
+  const s = loadData('cong_settings', null);
+
+  if(!s||!s.name){ errEl.textContent='회중 설정이 없습니다. 마스터에게 문의하세요'; return; }
+  if(s.name !== cong){ errEl.textContent='회중 이름이 올바르지 않습니다'; return; }
+  if(s.password !== pw){ errEl.textContent='비밀번호가 올바르지 않습니다'; return; }
+  if(!name){ errEl.textContent='이름을 입력해주세요'; return; }
+  if(pin.length < 4){ errEl.textContent='PIN은 4자리 이상이어야 합니다'; return; }
+
+  const members = loadData('cong_members', []);
+  const idx = members.findIndex(m => m.name === name);
+  if(idx < 0){ errEl.textContent='명단에 등록되지 않은 이름입니다. 관리자에게 문의하세요'; return; }
+  if(members[idx].pin){ errEl.textContent='이미 PIN이 설정되어 있습니다. 로그인 후 변경해주세요'; return; }
+
+  // PIN 저장
+  members[idx].pin = pin;
+  delete members[idx].temp_pin;
+  saveData('cong_members', members);
+  // Firebase 동기화
+  if(window._firebaseReady) fsSave('members', members);
+
+  errEl.textContent = '';
+  showToast('✅ PIN 등록 완료! 이제 로그인하세요');
+  switchLoginMode('login');
+  document.getElementById('li-pin').value = '';
+}
 
   // 마스터 계정 로그인 (이름 불필요)
   if(cong === MASTER.id && pw === MASTER.pw){
@@ -1087,13 +1155,17 @@ function doLogin(){
     if(pin !== me.pin){ errEl.textContent='PIN이 올바르지 않습니다'; return; }
   }
 
-  // 방향 B: PIN 설정 안 된 장로/봉사의종은 전도인으로 입장
+  // 등급 및 등록 여부 결정
   let effectiveGrade = me ? me.grade : 'pub';
-  if(me && (me.grade==='elder'||me.grade==='ms') && !me.pin){
-    effectiveGrade = 'pub'; // PIN 미설정 → 전도인으로
-    setTimeout(()=>showToast('⚠ PIN 미설정 — 전도인 권한으로 입장. 관리자에게 PIN 설정을 요청하세요.'),800);
+  const isRegistered = !!me; // 명단에 있으면 등록회원
+
+  // PIN 미설정 장로/봉사의종 → 권한 보류 (전도인으로)
+  if(me && (me.grade==='elder'||me.grade==='ms') && !me.pin && !me.temp_pin){
+    effectiveGrade = 'pub';
+    setTimeout(()=>showToast('⚠ PIN 미설정 — 전도인 권한으로 입장. 관리자탭에서 PIN을 설정해주세요.'),800);
   }
-  SESSION = { loggedIn:true, congName:cong, userName:name, grade:effectiveGrade, isMaster:false };
+  SESSION = { loggedIn:true, congName:cong, userName:name,
+    grade:effectiveGrade, isMaster:false, isRegistered };
   saveData('cong_session', SESSION);
   errEl.textContent = '';
   startApp();
@@ -1185,16 +1257,48 @@ function isElder(){  return SESSION.grade === 'elder' || isMaster(); }
 function isMS(){     return SESSION.grade === 'ms' || isElder(); }
 
 // 회중 비번·이름 변경: 마스터만
+// ══════════════════════════════════════════════════════════
+// 권한 매트릭스 v2
+//  마스터 : 회중비번초기화·명단등록·등급조정·계획표업다운·자료실전체·공식일정·공지·PIN초기화
+//  장로   : 계획표업다운·자료실전체·공식일정·공지배너 (명단관리 불가)
+//  봉사의종: 공개일정열람·공개자료실 다운만
+//  전도인 : 공개일정열람·공개자료실 다운만
+//  비회원  : 공개일정열람만 (자료실 불가)
+// ══════════════════════════════════════════════════════════
+function isMaster(){ return SESSION.isMaster===true; }
+function isElder(){  return SESSION.grade==='elder'||isMaster(); }
+function isMS(){     return SESSION.grade==='ms'||isElder(); }
+function isRegistered(){ return SESSION.isRegistered===true||isMaster(); }
+
+function canChangeCongSettings(){ return isMaster(); }
+function canManageMembers(){ return isMaster(); } // 명단·등급관리: 마스터만
+function canSetNotice(){ return isElder(); }
+function canManageEvents(){ return isElder(); }
+function canUpload(){ return isElder(); }         // 계획표 업로드: 장로 이상
+function canUploadLib(){ return isElder(); }      // 자료실 업로드: 장로 이상
+function canDeleteLib(){ return isElder(); }      // 자료실 삭제: 장로 이상
+function canSeeElder(){ return isElder(); }
+function canEdit(){ return isElder(); }
+function canSeeSettings(){ return isElder(); }    // 관리자탭: 장로 이상
+
+// 자료실 접근: all=모든등록회원 / elder=장로이상
+function canLibAccess(access){
+  if(!access||access==='all') return isRegistered(); // 등록회원만
+  if(access==='elder') return isElder();
+  return isRegistered();
+}
+// 비로그인/미등록은 자료실 완전 차단
+function canSeeLibrary(){ return isRegistered(); }
+
 function refreshSettingsSections(){
-  // 마스터 전용 섹션
   const secCong = document.getElementById('sec-cong-settings');
   if(secCong) secCong.style.display = isMaster() ? 'block' : 'none';
-  // 장로 이상 섹션
   const secElder = document.getElementById('sec-elder-settings');
   if(secElder) secElder.style.display = isElder() ? 'block' : 'none';
-  // 봉사의종 이상 섹션
   const secMS = document.getElementById('sec-ms-settings');
-  if(secMS) secMS.style.display = isMS() ? 'block' : 'none';
+  if(secMS) secMS.style.display = isElder() ? 'block' : 'none'; // 장로 이상만
+  const secMasterMembers = document.getElementById('sec-master-members');
+  if(secMasterMembers) secMasterMembers.style.display = isMaster() ? 'block' : 'none';
 }
 
 function canChangeCongSettings(){ return isMaster(); }
@@ -1628,7 +1732,7 @@ function openEvtDetail(id){
       <div style="display:flex;gap:10px;align-items:center"><span style="font-size:12px;color:var(--g400);min-width:44px">범위</span><span class="badge ${e.room==='elder'?'b-gold':'b-pri'}">${e.room==='elder'?'🔒 장로 전용':'🌐 전체공개'}</span></div>
     </div>`;
   const footer=canManageEvents()
-    ?`<button class="btn btn-danger" onclick="deleteEvt()" style="flex:1">삭제</button><button class="btn btn-sec" onclick="closeModal('evt-detail-modal')" style="flex:2">닫기</button>`
+    ?`<button class="btn btn-danger" onclick="deleteEvt()" style="flex:1">삭제</button><button class="btn btn-sec" onclick="editEvt('${id}')" style="flex:1">수정</button><button class="btn btn-sec" onclick="closeModal('evt-detail-modal')" style="flex:1">닫기</button>`
     :`<button class="btn btn-sec btn-full" onclick="closeModal('evt-detail-modal')">닫기</button>`;
   document.getElementById('evt-detail-footer').innerHTML=footer;
   openModal('evt-detail-modal');
@@ -1646,6 +1750,50 @@ function saveOfficialEvent(){
   ['evt-date','evt-name','evt-time','evt-place'].forEach(i=>document.getElementById(i).value='');
   showToast('일정이 추가되었습니다');
   const d=new Date();document.getElementById('evt-date').value=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function editEvt(id){
+  const e=DB.events.find(ev=>ev.id===id);
+  if(!e)return;
+  closeModal('evt-detail-modal');
+  // 수정 모달 열기 (기존 값 채우기)
+  openModal('evt-add-modal');
+  document.getElementById('evt-date').value=e.date||'';
+  document.getElementById('evt-name').value=e.name||'';
+  document.getElementById('evt-time').value=e.time||'';
+  document.getElementById('evt-place').value=e.place||'';
+  document.getElementById('evt-type').value=e.type||'meeting';
+  document.getElementById('evt-room').value=e.room||'open';
+  // 저장 버튼을 수정으로 변경
+  STATE.editingEvtId=id;
+  const saveBtn=document.querySelector('#evt-add-modal .modal-footer .btn-pri');
+  if(saveBtn){saveBtn.textContent='수정 저장';saveBtn.onclick=saveEditedEvent;}
+}
+
+function saveEditedEvent(){
+  const id=STATE.editingEvtId;
+  if(!id)return;
+  const date=document.getElementById('evt-date').value;
+  const name=document.getElementById('evt-name').value.trim();
+  if(!date||!name){showToast('날짜와 이름을 입력해주세요');return;}
+  const evts=DB.events;
+  const idx=evts.findIndex(e=>e.id===id);
+  if(idx>=0){
+    evts[idx]={...evts[idx],date,name,
+      time:document.getElementById('evt-time').value,
+      place:document.getElementById('evt-place').value.trim(),
+      type:document.getElementById('evt-type').value,
+      room:document.getElementById('evt-room').value,
+      updatedAt:Date.now()};
+    DB.events=evts;
+  }
+  STATE.editingEvtId=null;
+  // 버튼 원복
+  const saveBtn=document.querySelector('#evt-add-modal .modal-footer .btn-pri');
+  if(saveBtn){saveBtn.textContent='저장';saveBtn.onclick=saveOfficialEvent;}
+  closeModal('evt-add-modal');
+  renderCalendar();if(STATE.selDate)renderDayEvents(STATE.selDate);renderOfficialList();
+  showToast('✅ 일정이 수정되었습니다');
 }
 
 function deleteEvt(){
@@ -1831,6 +1979,12 @@ function filterLib(cat){
 }
 
 function renderLibrary(){
+  // 미등록 회원은 자료실 차단
+  if(!canSeeLibrary()){
+    document.getElementById('lib-list').innerHTML=
+      `<div class="empty-state"><div class="empty-icon">🔒</div><div class="empty-title">접근 제한</div><div class="empty-sub">자료실은 등록 회원만 이용할 수 있습니다.<br>관리자탭에서 이름과 PIN을 등록해주세요.</div></div>`;
+    return;
+  }
   let files=DB.library.filter(f=>canLibAccess(f.access||'all'));
   if(STATE.libFilter!=='all'){
     if(STATE.libFilter==='장로')files=files.filter(f=>f.access==='elder');
@@ -1849,7 +2003,10 @@ function renderLibrary(){
         <div style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${f.title}</div>
         <div style="font-size:11px;color:var(--g400);margin-top:2px">${f.desc||''} · ${fmtDate(f.createdAt)}</div>
       </div>
-      <span style="font-size:18px;color:var(--g300)">⬇</span>
+      <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
+        <span style="font-size:18px;color:var(--g300)">⬇</span>
+        ${canDeleteLib()?`<button onclick="event.stopPropagation();deleteLibFile('${f.id}')" style="font-size:10px;padding:2px 6px;border:none;background:var(--err-lt);color:var(--err);border-radius:4px;cursor:pointer">삭제</button>`:''}
+      </div>
     </div>`).join('')}</div>`;
 }
 
@@ -1888,6 +2045,13 @@ function handleLibFile(input){
     if(!document.getElementById('lib-title').value)document.getElementById('lib-title').value=file.name.replace(/\.[^.]+$/,'');
   };
   reader.readAsDataURL(file);
+}
+
+function deleteLibFile(id){
+  if(!canDeleteLib()){showToast('장로 이상만 삭제 가능합니다');return;}
+  if(!confirm('자료를 삭제하시겠습니까?'))return;
+  DB.library=DB.library.filter(f=>f.id!==id);
+  renderLibrary();showToast('삭제되었습니다');
 }
 
 function saveLibFile(){
