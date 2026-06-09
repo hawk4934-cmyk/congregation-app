@@ -709,19 +709,17 @@ function parseMasterPlan(sheetData) {
 }
 
 function parseSaengBong(sheetData) {
-  // ══════════════════════════════════════════════════════
-  // 생활과 봉사 집회 계획표 파서 v3
-  // 검증된 구조 (서부 평일집회 계획표 6월/7월 시트):
-  //   주차헤더: B열에 "X월 X-Y일...", H열에 "♬ 노래", O열 "사회자 :", P열 이름
-  //   과제행:   G열(7) "1. 과제내용...", P열(16) 이름
-  //   야외봉사: O열(15) 학생, P열(16) 보조
-  //   낭독행:   N열(14) "(낭독:", O열(15) 낭독자, P열(16) 보조
-  //   맺음말:   B열 "8:50 맺음말...", O열 "기도:", P열 이름
-  //   특수주간: "[순회 대회 주간]" 등 → 건너뜀
-  // ══════════════════════════════════════════════════════
   const cl = v => String(v||'').replace(/\u200b/g,'').replace(/\s+/g,' ').trim();
-  const C=2, N=13, O=14, P=15;  // 0-based 열 인덱스
+  const C=2, N=13, O=14, P=15;
   const SECS = ['성경에 담긴 보물','야외 봉사에 힘쓰십시오','그리스도인 생활'];
+
+  // 디버그: 첫 15행 주요 열 출력
+  console.log('[생봉파서v3] 총행수:', sheetData.length);
+  sheetData.slice(0,15).forEach((row,i)=>{
+    if(!row) return;
+    const b=cl(row[1]||''), g=cl(row[6]||''), o=cl(row[14]||''), p=cl(row[15]||'');
+    if(b||g||o||p) console.log(`  행${i+1}: B="${b.slice(0,20)}" G="${g.slice(0,20)}" O="${o}" P="${p}"`);
+  });
 
   // 과제내용 열 자동 감지 (기본 G열=6)
   let TASK_COL = 6;
@@ -2035,7 +2033,14 @@ function loadSheets(sheetList){
   let combined=[];
   sheetList.forEach(sName=>{
     const ws=wb.Sheets[sName]; if(!ws)return;
-    const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+    // raw:false → 날짜/숫자를 문자열로 변환, defval:'' → 빈셀 처리
+    const data=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
+    console.log(`[시트 ${sName}] ${data.length}행 로드`);
+    // 처음 15행 디버그 출력
+    data.slice(0,15).forEach((row,i)=>{
+      const nonEmpty = row.map((v,ci)=>v?`[${ci}]${v}`:null).filter(Boolean);
+      if(nonEmpty.length) console.log(`  행${i+1}:`, nonEmpty.slice(0,8).join(' | '));
+    });
     combined=combined.concat(data);
   });
   STATE.uploadSheetData=combined;
